@@ -1,0 +1,1592 @@
+import { Theme, AssetItem, GridRow, CartRow, SpecRow, SlideItem, ClipItem } from "theme.slint";
+import { Plate, HLine, Btn, IconBtn, Tab, StatusIconBtn, Pick, TagChip, DialogHead, BridgeStatus, DialogField, Card, CartLine } from "components.slint";
+import { ListView, Slider } from "std-widgets.slint";
+
+// ---------------------------------------------------------------------------
+// Window
+// ---------------------------------------------------------------------------
+export component AppWindow inherits Window {
+    title: "3D Asset Browser";
+    no-frame: true;
+    // Do NOT pin width/height here: a constant binding freezes Slint's surface
+    // size, so an OS resize leaves the layout drawn at the old size. Use a floor
+    // plus an initial size pushed from Rust (main.rs) instead.
+    min-width: 1368px;
+    min-height: 620px;
+    background: Theme.window-bg;
+
+    // data
+    in property <[AssetItem]> items: [];
+    in property <[GridRow]>   rows: [];
+    in property <[CartRow]>   cart: [];
+    in property <[SpecRow]>   spec: [];
+    in property <[SlideItem]> slides: [];
+    in property <[ClipItem]>  clips: [];
+
+    in property <int>        count-models: 0;
+    in property <int>        count-materials: 0;
+    in property <int>        count-rigs: 0;
+    in-out property <int>    tab: 0;
+    property <length>        card-w: max(168px, (root.width - 92px) / 6);
+    property <length>        card-h: root.card-w + 108px;
+    in-out property <string> count-label: "";
+    in-out property <string> query: "";
+    in property <[string]>   l1-options: [];
+    in property <[string]>   l2-options: [];
+    in property <[string]>   sort-options: [];
+    in property <[string]>   style-options: [];
+    in-out property <int>    l1-index: -1;
+    in-out property <int>    l2-index: -1;
+    in-out property <int>    sort-index: 0;
+    in-out property <int>    style-index: 0;
+    in property <bool>       filters-active: false;
+    in-out property <string> status-text: "";
+    in-out property <bool>   busy: false;
+
+    in property <int>        page: 0;
+    in property <int>        page-count: 1;
+    in property <int>        page-size: 12;
+    in property <[int]>      page-sizes: [];
+    // Parallel to `page-sizes` (same length/order), same values as strings:
+    // the pick popup's `for` list is typed [string], so it needs a string list.
+    in property <[string]>   page-size-labels: [];
+    in-out property <length> grid-scroll: 0px;
+
+    in-out property <bool>   page-edit-open: false;
+    in-out property <string> page-edit-text: "";
+
+    in-out property <int> pick-open: -1; // 0 l1, 1 l2, 2 sort, 3 style, 4 edit-l1, 5 edit-l2, 6 page-size
+    property <string> l1-value: root.l1-options.length > 0 && root.l1-index >= 0 && root.l1-index < root.l1-options.length ? root.l1-options[root.l1-index] : "All categories";
+    property <string> l2-value: root.l2-options.length > 0 && root.l2-index >= 0 && root.l2-index < root.l2-options.length ? root.l2-options[root.l2-index] : "All subcategories";
+    property <string> sort-value: root.sort-index >= 0 && root.sort-index < root.sort-options.length ? root.sort-options[root.sort-index] : "";
+    property <string> style-value: root.style-index >= 0 && root.style-index < root.style-options.length ? root.style-options[root.style-index] : "";
+
+    in-out property <string> blender-state: "checking";
+    in-out property <string> unity-state: "checking";
+    in-out property <string> painter-state: "checking";
+
+    in-out property <bool>           detail-open: false;
+    in-out property <string>         detail-code: "";
+    in-out property <string>         detail-slug: "";
+    in-out property <string>         detail-category: "";
+    in-out property <string>         detail-badge: "";
+    in-out property <string>         detail-kind: "model";
+    in-out property <image>          detail-thumb;
+    in-out property <[string]>       edit-l1-options: [];
+    in-out property <[string]>       edit-l2-options: [];
+    in-out property <int>            edit-l1-index: -1;
+    in-out property <int>            edit-l2-index: -1;
+    in-out property <[string]>       edit-tags: [];
+    in-out property <bool>           edit-dirty: false;
+    in-out property <bool>           edit-busy: false;
+    in-out property <bool>           delete-armed: false;
+    in-out property <string>         edit-tag-input: "";
+
+    in property <int>                rig-clip-index: 0;
+    in property <bool>               rig-playing: false;
+    in-out property <string>         rig-time: "";
+    in-out property <image>          detail-frame;
+    in property <bool>               rig-has-3d: false;
+    in-out property <float>          rig-seek-pos: 0;
+    in property <float>              rig-duration: 0;
+
+    in-out property <bool>   cart-open: false;
+    in property <int>        cart-count: 0;
+
+    in-out property <bool>   blender-open: false;
+    in-out property <string> blender-status: "";
+    in-out property <string> blender-root: "";
+    in-out property <string> blender-base: "";
+    in-out property <bool>   unity-open: false;
+    in-out property <string> unity-status: "";
+    in-out property <string> unity-base: "";
+    in-out property <bool>   painter-open: false;
+    in-out property <string> painter-status: "";
+    in-out property <string> painter-base: "";
+    in-out property <string> painter-bridge: "";
+    in-out property <string> painter-root: "";
+
+    in-out property <string> toast-text: "";
+    in-out property <string> toast-tone: "";
+    in-out property <bool>   toast-open: false;
+
+    function pick-select(i: int) {
+        if root.pick-open == 0 { root.select-l1(i); }
+        else if root.pick-open == 1 { root.select-l2(i); }
+        else if root.pick-open == 2 { root.select-sort(i); }
+        else if root.pick-open == 3 { root.select-style(i); }
+        else if root.pick-open == 4 { root.detail-set-l1(i); }
+        else if root.pick-open == 5 { root.detail-set-l2(i); }
+        else if root.pick-open == 6 { root.set-page-size(root.page-sizes[i]); }
+        root.pick-open = -1;
+    }
+    function stage-active() -> bool { return root.detail-kind == "rig"; }
+    function empty-title() -> string {
+        if root.filters-active { return "No matching assets"; }
+        if root.tab == 1 { return "No textures"; }
+        if root.tab == 2 { return "No rigs"; }
+        return "No 3D assets";
+    }
+    function empty-hint() -> string {
+        if root.filters-active { return "Adjust the search or filters, then try again."; }
+        if root.tab == 1 { return "No material entries in manifest.json."; }
+        if root.tab == 2 { return "No rig entries in manifest.json."; }
+        return "No model entries in manifest.json.";
+    }
+
+    // ---- callbacks ---------------------------------------------------------
+    callback select-tab(int);
+    callback set-query(string);
+    callback clear-query();
+    callback select-l1(int);
+    callback select-l2(int);
+    callback select-sort(int);
+    callback select-style(int);
+    callback clear-filters();
+    callback page-first();
+    callback page-prev();
+    callback page-next();
+    callback page-last();
+    callback page-goto(int);
+    callback page-goto-text(string);
+    callback set-page-size(int);
+    callback refresh-all();
+    callback ensure-image(int);
+    callback card-cart(int);
+    callback card-copy(int);
+    callback card-blender(int);
+    callback card-unity(int);
+    callback card-painter(int);
+    callback card-tag(string);
+    callback open-detail(int);
+    callback close-detail();
+    callback detail-set-l1(int);
+    callback detail-set-l2(int);
+    callback detail-add-tag(string);
+    callback detail-remove-tag(string);
+    callback detail-save();
+    callback detail-select-slide(int);
+    callback detail-delete();
+    callback detail-refresh();
+    callback detail-blender();
+    callback detail-unity();
+    callback detail-painter();
+    callback check-bridge(string);
+    callback blender-open-dialog();
+    callback blender-close();
+    callback blender-config(string, string);
+    callback blender-send(string);
+    callback unity-open-dialog();
+    callback unity-close();
+    callback unity-config(string);
+    callback unity-place-cart();
+    callback unity-action(string);
+    callback painter-open-dialog();
+    callback painter-close();
+    callback painter-config(string, string, string);
+    callback painter-send(string);
+    callback toast(string, string);
+    callback open-cart();
+    callback close-cart();
+    callback cart-remove(string);
+    callback cart-clear();
+    callback cart-select-all-filtered();
+    callback cart-export();
+    callback cart-open-detail(string);
+    callback rig-toggle-play();
+    callback rig-restart();
+    callback rig-reset-view();
+    callback rig-select-clip(int);
+    callback rig-seek(float);
+    callback rig-orbit(float, float);
+    callback rig-zoom(float);
+    callback win-minimize();
+    callback win-close();
+
+    // ---- shell -------------------------------------------------------------
+    VerticalLayout {
+        spacing: 0px;
+
+        // ============ header ============
+        header := Rectangle {
+            height: 60px;
+            // transparent: the root window already paints Theme.window-bg, and
+            // window-bg is translucent, so a second layer here would darken it.
+            background: transparent;
+            WindowMoveArea { }
+            Rectangle { y: parent.height - 1px; height: 1px; width: parent.width; background: Theme.divider; }
+            HorizontalLayout {
+                width: parent.width;
+                height: parent.height;
+                padding-left: 16px;
+                padding-right: 12px;
+                padding-top: 12px;
+                padding-bottom: 12px;
+                spacing: 12px;
+
+                // brand (drag zone)
+                Rectangle {
+                    width: 176px;
+                    // No explicit height: inside this padded HorizontalLayout an
+                    // explicit height sticks the box to the content top, so the
+                    // glyphs centre 14px too low. Let the layout cross-stretch it.
+                    WindowMoveArea { }
+                    Text {
+                        text: "ASSET BROWSER";
+                        font-family: "Haettenschweiler";
+                        font-size: 20px;
+                        letter-spacing: -0.4px;
+                        color: Theme.text;
+                        width: parent.width;
+                        height: parent.height;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                }
+
+                WindowMoveArea { horizontal-stretch: 1; }
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: center;
+                    Tab { label: "3D Assets"; width: 150px; active: root.tab == 0; clicked => { root.select-tab(0); } }
+                    Tab { label: "Textures"; width: 150px; active: root.tab == 1; clicked => { root.select-tab(1); } }
+                    Tab { label: "Rigs"; width: 150px; active: root.tab == 2; clicked => { root.select-tab(2); } }
+                }
+
+                WindowMoveArea { horizontal-stretch: 1; }
+
+                StatusIconBtn {
+                    commands: "M 13.3 5.9 A 6.1 6.1 0 1 1 13.29 18.1 A 6.1 6.1 0 1 1 13.3 5.9 M 10.4 12 L 16 12 L 13.2 15.9 Z M 7.2 13.9 L 4.5 12 L 7.2 10.1";
+                    tint: Theme.blender;
+                    state: root.blender-state;
+                    clicked => { root.blender-open-dialog(); }
+                }
+                StatusIconBtn {
+                    commands: "M 12 2.9 L 20.4 8 L 20.4 16 L 12 21.1 L 3.6 16 L 3.6 8 Z M 3.6 8 L 12 13.1 L 20.4 8 M 12 13.1 L 12 21.1";
+                    tint: Theme.unity;
+                    state: root.unity-state;
+                    clicked => { root.unity-open-dialog(); }
+                }
+                StatusIconBtn {
+                    commands: "M 12 3.4 C 7.1 3.4 3.2 7.3 3.2 12.2 C 3.2 16 6.2 19 10 19 L 11.4 19 C 12.4 19 13 18 12.6 17.1 C 12.2 16.2 12.6 15.1 13.5 15.1 L 15.4 15.1 C 18.4 15.1 20.6 12.9 20.6 9.9 C 20.6 5.7 16.9 3.4 12 3.4 Z";
+                    tint: Theme.painter;
+                    state: root.painter-state;
+                    clicked => { root.painter-open-dialog(); }
+                }
+                Rectangle { width: 1px; height: 24px; background: Theme.divider; }
+                IconBtn {
+                    commands: "M 3 3.5 L 5.3 3.5 L 7.7 15.6 L 17.6 15.6 L 19.5 8 L 6.1 8";
+                    tint: root.cart-open ? Theme.accent : Theme.text-dim;
+                    active: root.cart-open;
+                    clicked => { root.cart-open ? root.close-cart() : root.open-cart(); }
+                }
+                Rectangle { width: 1px; height: 24px; background: Theme.divider; }
+                IconBtn { commands: "M 5 12 L 19 12"; clicked => { root.win-minimize(); } }
+                IconBtn { commands: "M 5 5 L 19 19 M 19 5 L 5 19"; danger: true; clicked => { root.win-close(); } }
+            }
+        }
+
+        // ============ toolbar ============
+        toolbar := Rectangle {
+            height: 58px;
+            // transparent: see header — the root window supplies window-bg once.
+            background: transparent;
+            Rectangle { y: parent.height - 1px; height: 1px; width: parent.width; background: Theme.divider; }
+            HorizontalLayout {
+                width: parent.width;
+                height: parent.height;
+                padding-left: 16px;
+                padding-right: 16px;
+                padding-top: 12px;
+                padding-bottom: 12px;
+                spacing: 8px;
+
+                Text {
+                    text: "LIBRARY";
+                    font-family: "Cascadia Mono";
+                    font-size: 11px;
+                    letter-spacing: 1px;
+                    color: Theme.text-faint;
+                    vertical-alignment: center;
+                }
+
+                search := Rectangle {
+                    min-width: 200px;
+                    max-width: 420px;
+                    horizontal-stretch: 1;
+                    height: 34px;
+                    background: Theme.surface-2;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    border-radius: 6px;
+                    Rectangle {
+                        x: 11px; y: 11px; width: 11px; height: 11px;
+                        border-radius: 5.5px;
+                        border-width: 1.5px;
+                        border-color: Theme.text-faint;
+                        background: transparent;
+                    }
+                    Path {
+                        x: 20px; y: 20px; width: 5px; height: 5px;
+                        fill: transparent;
+                        stroke: Theme.text-faint;
+                        stroke-width: 1.5px;
+                        commands: "M 0 0 L 4 4";
+                    }
+                    TextInput {
+                        x: 32px;
+                        y: 0px;
+                        width: search.width - 32px - (root.query != "" ? 32px : 10px);
+                        height: search.height;
+                        text <=> root.query;
+                        color: Theme.text;
+                        font-family: "Arial";
+                        font-size: 13px;
+                        single-line: true;
+                        vertical-alignment: center;
+                        edited => { root.set-query(self.text); }
+                    }
+                    if root.query == "" : Text {
+                        x: 32px;
+                        y: 0px;
+                        width: search.width - 42px;
+                        height: search.height;
+                        text: "Search code / slug / name / tag";
+                        color: Theme.text-faint;
+                        font-family: "Arial";
+                        font-size: 13px;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                    if root.query != "" : IconBtn {
+                        x: search.width - 32px;
+                        y: 3px;
+                        size: 28px;
+                        commands: "M 3 3 L 11 11 M 11 3 L 3 11";
+                        clicked => { root.clear-query(); }
+                    }
+                }
+
+                l1-pick := Pick { width: 150px; value: root.l1-value; open: root.pick-open == 0; clicked => { root.pick-open = root.pick-open == 0 ? -1 : 0; } }
+                l2-pick := Pick { width: 150px; value: root.l2-value; enabled: root.l1-index >= 0; open: root.pick-open == 1; clicked => { root.pick-open = root.pick-open == 1 ? -1 : 1; } }
+                sort-pick := Pick { width: 130px; value: root.sort-value; open: root.pick-open == 2; clicked => { root.pick-open = root.pick-open == 2 ? -1 : 2; } }
+                style-pick := Pick { width: 130px; value: root.style-value; open: root.pick-open == 3; clicked => { root.pick-open = root.pick-open == 3 ? -1 : 3; } }
+
+                Btn {
+                    label: "Refresh";
+                    width: 88px;
+                    height: 34px;
+                    enabled: !root.busy;
+                    clicked => { root.refresh-all(); }
+                }
+                pagesize-pick := Pick { width: 120px; value: "\{root.page-size} / page"; open: root.pick-open == 6; clicked => { root.pick-open = root.pick-open == 6 ? -1 : 6; } }
+                Rectangle { horizontal-stretch: 1; }
+                Text {
+                    text: root.count-label;
+                    font-family: "Cascadia Mono";
+                    font-size: 11px;
+                    letter-spacing: 0.9px;
+                    color: Theme.text-faint;
+                    vertical-alignment: center;
+                    horizontal-alignment: right;
+                    overflow: elide;
+                }
+            }
+        }
+
+        // ============ filter chips ============
+        if root.filters-active : Rectangle {
+            height: 40px;
+            // transparent: see header — the root window supplies window-bg once.
+            background: transparent;
+            Rectangle { y: parent.height - 1px; height: 1px; width: parent.width; background: Theme.divider; }
+            HorizontalLayout {
+                width: parent.width;
+                height: parent.height;
+                padding-left: 16px;
+                padding-right: 16px;
+                padding-top: 7px;
+                padding-bottom: 7px;
+                spacing: 8px;
+                alignment: start;
+                Text {
+                    text: "ACTIVE FILTERS";
+                    font-family: "Cascadia Mono";
+                    font-size: 10px;
+                    letter-spacing: 1px;
+                    color: Theme.text-faint;
+                    vertical-alignment: center;
+                }
+                Btn { label: "Clear filters"; height: 26px; font-size: 11px; mono: true; clicked => { root.clear-filters(); } }
+            }
+        }
+
+        // ============ grid ============
+        Rectangle { height: 16px; }
+        Rectangle {
+            vertical-stretch: 1;
+            background: transparent;
+            if root.rows.length > 0 : ListView {
+                content-y <=> root.grid-scroll;
+                for row in root.rows : HorizontalLayout {
+                    height: root.card-h + 12px;
+                    spacing: 12px;
+                    padding-left: 16px;
+                    padding-right: 16px;
+                    padding-bottom: 12px;
+                    Card {
+                        width: root.card-w;
+                        code: root.items[row.a].code;
+                        slug: root.items[row.a].slug;
+                        thumb: root.items[row.a].thumb;
+                        t1: root.items[row.a].tag1;
+                        t2: root.items[row.a].tag2;
+                        t3: root.items[row.a].tag3;
+                        in-cart: root.items[row.a].in-cart;
+                        kind: root.items[row.a].kind;
+                        init => { root.ensure-image(row.a); }
+                        open => { root.open-detail(row.a); }
+                        cart => { root.card-cart(row.a); }
+                        copy => { root.card-copy(row.a); }
+                        blender => { root.card-blender(row.a); }
+                        unity => { root.card-unity(row.a); }
+                        painter => { root.card-painter(row.a); }
+                        tag(text) => { root.card-tag(text); }
+                    }
+                    if row.n >= 2 : Card {
+                        width: root.card-w;
+                        code: root.items[row.b].code; slug: root.items[row.b].slug; thumb: root.items[row.b].thumb;
+                        t1: root.items[row.b].tag1; t2: root.items[row.b].tag2; t3: root.items[row.b].tag3;
+                        in-cart: root.items[row.b].in-cart; kind: root.items[row.b].kind;
+                        init => { root.ensure-image(row.b); }
+                        open => { root.open-detail(row.b); }
+                        cart => { root.card-cart(row.b); }
+                        copy => { root.card-copy(row.b); }
+                        blender => { root.card-blender(row.b); }
+                        unity => { root.card-unity(row.b); }
+                        painter => { root.card-painter(row.b); }
+                        tag(text) => { root.card-tag(text); }
+                    }
+                    if row.n >= 3 : Card {
+                        width: root.card-w;
+                        code: root.items[row.c].code; slug: root.items[row.c].slug; thumb: root.items[row.c].thumb;
+                        t1: root.items[row.c].tag1; t2: root.items[row.c].tag2; t3: root.items[row.c].tag3;
+                        in-cart: root.items[row.c].in-cart; kind: root.items[row.c].kind;
+                        init => { root.ensure-image(row.c); }
+                        open => { root.open-detail(row.c); }
+                        cart => { root.card-cart(row.c); }
+                        copy => { root.card-copy(row.c); }
+                        blender => { root.card-blender(row.c); }
+                        unity => { root.card-unity(row.c); }
+                        painter => { root.card-painter(row.c); }
+                        tag(text) => { root.card-tag(text); }
+                    }
+                    if row.n >= 4 : Card {
+                        width: root.card-w;
+                        code: root.items[row.d].code; slug: root.items[row.d].slug; thumb: root.items[row.d].thumb;
+                        t1: root.items[row.d].tag1; t2: root.items[row.d].tag2; t3: root.items[row.d].tag3;
+                        in-cart: root.items[row.d].in-cart; kind: root.items[row.d].kind;
+                        init => { root.ensure-image(row.d); }
+                        open => { root.open-detail(row.d); }
+                        cart => { root.card-cart(row.d); }
+                        copy => { root.card-copy(row.d); }
+                        blender => { root.card-blender(row.d); }
+                        unity => { root.card-unity(row.d); }
+                        painter => { root.card-painter(row.d); }
+                        tag(text) => { root.card-tag(text); }
+                    }
+                    if row.n >= 5 : Card {
+                        width: root.card-w;
+                        code: root.items[row.e].code; slug: root.items[row.e].slug; thumb: root.items[row.e].thumb;
+                        t1: root.items[row.e].tag1; t2: root.items[row.e].tag2; t3: root.items[row.e].tag3;
+                        in-cart: root.items[row.e].in-cart; kind: root.items[row.e].kind;
+                        init => { root.ensure-image(row.e); }
+                        open => { root.open-detail(row.e); }
+                        cart => { root.card-cart(row.e); }
+                        copy => { root.card-copy(row.e); }
+                        blender => { root.card-blender(row.e); }
+                        unity => { root.card-unity(row.e); }
+                        painter => { root.card-painter(row.e); }
+                        tag(text) => { root.card-tag(text); }
+                    }
+                    if row.n >= 6 : Card {
+                        width: root.card-w;
+                        code: root.items[row.f].code; slug: root.items[row.f].slug; thumb: root.items[row.f].thumb;
+                        t1: root.items[row.f].tag1; t2: root.items[row.f].tag2; t3: root.items[row.f].tag3;
+                        in-cart: root.items[row.f].in-cart; kind: root.items[row.f].kind;
+                        init => { root.ensure-image(row.f); }
+                        open => { root.open-detail(row.f); }
+                        cart => { root.card-cart(row.f); }
+                        copy => { root.card-copy(row.f); }
+                        blender => { root.card-blender(row.f); }
+                        unity => { root.card-unity(row.f); }
+                        painter => { root.card-painter(row.f); }
+                        tag(text) => { root.card-tag(text); }
+                    }
+                }
+            }
+            if root.rows.length == 0 : Rectangle {
+                width: parent.width;
+                height: parent.height;
+                background: transparent;
+                VerticalLayout {
+                    width: parent.width;
+                    height: parent.height;
+                    alignment: center;
+                    spacing: 10px;
+                    Rectangle {
+                        width: 56px;
+                        height: 56px;
+                        background: Theme.surface-2;
+                        border-width: 1px;
+                        border-color: Theme.border;
+                        border-radius: 10px;
+                        Path {
+                            x: 16px; y: 16px; width: 24px; height: 24px;
+                            fill: transparent;
+                            stroke: Theme.text-faint;
+                            stroke-width: 1.7px;
+                            viewbox-width: 24;
+                            viewbox-height: 24;
+                            commands: root.filters-active
+                                ? "M 4 6 L 20 6 M 7.5 12 L 16.5 12 M 10.5 18 L 13.5 18"
+                                : "M 3 7 L 3 17 L 21 17 L 21 7 L 11.3 7 L 9.3 5 L 5 5 L 3 7 Z";
+                        }
+                    }
+                    Text {
+                        text: root.empty-title();
+                        font-family: "Haettenschweiler";
+                        font-size: 30px;
+                        color: Theme.text;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: root.empty-hint();
+                        font-family: "Arial";
+                        font-size: 13px;
+                        color: Theme.text-faint;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                    if root.filters-active : Btn {
+                        label: "Clear filters";
+                        width: 140px;
+                        height: 32px;
+                        clicked => { root.clear-filters(); }
+                    }
+                }
+            }
+            if root.page-count >= 1 && root.rows.length > 0 : Rectangle {
+                width: parent.width;
+                height: parent.height;
+                background: transparent;
+                HorizontalLayout {
+                    width: parent.width;
+                    height: 64px;
+                    y: parent.height - self.height - 18px;
+                    alignment: center;
+                    pagebar := Rectangle {
+                        height: 64px;
+                        border-radius: 32px;
+                        // No border: the old 1px light outline read as a harsh ring
+                        // around the pill. A soft shadow separates it instead.
+                        border-width: 0px;
+                        background: Theme.surface-2;
+                        animate background { duration: 150ms; easing: ease-out; }
+                        drop-shadow-color: #00000073;
+                        drop-shadow-blur: 14px;
+                        drop-shadow-offset-y: 5px;
+                        // Click barrier: declared FIRST so the control TouchAreas
+                        // below sit on top and win; the pill's padding/empty areas
+                        // land here and are swallowed instead of falling through to
+                        // the asset card behind the floating bar.
+                        TouchArea { }
+                        HorizontalLayout {
+                            padding-left: 12px;
+                            padding-right: 14px;
+                            padding-top: 12px;
+                            padding-bottom: 12px;
+                            spacing: 10px;
+                            alignment: center;
+                            IconBtn {
+                                size: 40px;
+                                commands: "M 17 5 L 11 12 L 17 19 M 11 5 L 5 12 L 11 19";
+                                enabled: root.page > 0;
+                                clicked => { root.page-first(); }
+                            }
+                            IconBtn {
+                                size: 40px;
+                                commands: "M 15 5 L 9 12 L 15 19";
+                                enabled: root.page > 0;
+                                clicked => { root.page-prev(); }
+                            }
+                            if root.page-edit-open : Rectangle {
+                                height: 40px;
+                                width: 84px;
+                                border-radius: 8px;
+                                background: Theme.surface-2;
+                                animate background { duration: 150ms; easing: ease-out; }
+                                border-width: 1px;
+                                border-color: Theme.accent;
+                                animate border-color { duration: 150ms; easing: ease-out; }
+                                TextInput {
+                                    x: 8px;
+                                    width: parent.width - 16px;
+                                    height: parent.height;
+                                    text <=> root.page-edit-text;
+                                    font-family: "Cascadia Mono";
+                                    font-size: 15px;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                    single-line: true;
+                                    init => { self.focus(); }
+                                    accepted => { root.page-goto-text(root.page-edit-text); root.page-edit-open = false; }
+                                    changed has-focus => { if (root.page-edit-open && !self.has-focus) { root.page-goto-text(root.page-edit-text); root.page-edit-open = false; } }
+                                }
+                            }
+                            if !root.page-edit-open : Rectangle {
+                                height: 40px;
+                                width: 84px;
+                                border-radius: 8px;
+                                background: page-ta.has-hover ? Theme.hover : transparent;
+                                animate background { duration: 150ms; easing: ease-out; }
+                                animate border-color { duration: 150ms; easing: ease-out; }
+                                page-ta := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        root.page-edit-text = "\{root.page + 1}";
+                                        root.page-edit-open = true;
+                                    }
+                                }
+                                Text {
+                                    text: "\{root.page + 1} / \{root.page-count}";
+                                    color: Theme.text;
+                                    font-family: "Cascadia Mono";
+                                    font-size: 15px;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                            }
+                            IconBtn {
+                                size: 40px;
+                                commands: "M 9 5 L 15 12 L 9 19";
+                                enabled: root.page + 1 < root.page-count;
+                                clicked => { root.page-next(); }
+                            }
+                            IconBtn {
+                                size: 40px;
+                                commands: "M 7 5 L 13 12 L 7 19 M 13 5 L 19 12 L 13 19";
+                                enabled: root.page + 1 < root.page-count;
+                                clicked => { root.page-last(); }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ============ detail modal ============
+    if root.detail-open : Rectangle {
+        width: root.width;
+        height: root.height;
+        background: Theme.overlay;
+        TouchArea { clicked => { root.close-detail(); } }
+        sheet := Rectangle {
+            x: (root.width - self.width) / 2;
+            y: (root.height - self.height) / 2;
+            width: min(root.width - 32px, 1180px);
+            height: min(root.height - 32px, 800px);
+            background: Theme.surface;
+            border-width: 1px;
+            border-color: Theme.border-strong;
+            border-radius: 12px;
+            clip: true;
+            TouchArea { }
+
+            HorizontalLayout {
+                width: parent.width;
+                height: parent.height;
+                spacing: 0px;
+
+                // ---- preview column (70%) ----
+                Rectangle {
+                    horizontal-stretch: 7;
+                    min-width: parent.width * 0.7 - 1px;
+                    background: Theme.surface;
+                    VerticalLayout {
+                        padding: 14px;
+                        spacing: 12px;
+
+                        // stage: 3D frame or the still preview, always filling
+                        stage := Rectangle {
+                            vertical-stretch: 1;
+                            background: Theme.well;
+                            border-width: 1px;
+                            border-color: Theme.border;
+                            border-radius: 8px;
+                            clip: true;
+                            if root.rig-has-3d : Image {
+                                x: 0px; y: 0px;
+                                width: parent.width;
+                                height: parent.height;
+                                source: root.detail-frame;
+                                image-fit: contain;
+                            }
+                            if !root.rig-has-3d : Image {
+                                x: 0px; y: 0px;
+                                width: parent.width;
+                                height: parent.height;
+                                source: root.detail-thumb;
+                                image-fit: contain;
+                            }
+                            if root.detail-badge != "" : Rectangle {
+                                x: 10px;
+                                y: parent.height - 32px;
+                                width: 96px;
+                                height: 22px;
+                                background: Theme.text;
+                                border-radius: 11px;
+                                HorizontalLayout {
+                                    padding-left: 9px;
+                                    padding-right: 9px;
+                                    alignment: center;
+                                    Text {
+                                        text: root.detail-badge;
+                                        color: Theme.accent-fg;
+                                        font-family: "Cascadia Mono";
+                                        font-size: 10.5px;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+                            if root.rig-has-3d : TouchArea {
+                                mouse-cursor: grab;
+                                property <length> prev-x: 0px;
+                                property <length> prev-y: 0px;
+                                moved => {
+                                    if (self.pressed) {
+                                        root.rig-orbit((self.mouse-x - self.prev-x) / 1px, (self.mouse-y - self.prev-y) / 1px);
+                                    }
+                                    self.prev-x = self.mouse-x;
+                                    self.prev-y = self.mouse-y;
+                                }
+                            }
+                        }
+
+                        // transport (rig only)
+                        if root.rig-has-3d : HorizontalLayout {
+                            height: 34px;
+                            spacing: 6px;
+                            alignment: center;
+                            Btn { label: "Restart"; height: 30px; font-size: 11px; mono: true; clicked => { root.rig-restart(); } }
+                            Btn { label: root.rig-playing ? "Pause" : "Play"; width: 66px; height: 30px; font-size: 11px; mono: true; clicked => { root.rig-toggle-play(); } }
+                            Slider {
+                                horizontal-stretch: 1;
+                                minimum: 0;
+                                maximum: root.rig-duration > 0 ? root.rig-duration : 1;
+                                step: 0.001;
+                                value <=> root.rig-seek-pos;
+                                changed value => { root.rig-seek(self.value); }
+                            }
+                            Text {
+                                text: root.rig-time;
+                                font-family: "Cascadia Mono";
+                                font-size: 11px;
+                                color: Theme.text-dim;
+                                width: 124px;
+                                horizontal-alignment: right;
+                                vertical-alignment: center;
+                            }
+                            IconBtn { size: 30px; commands: "M 5 12 L 19 12"; clicked => { root.rig-zoom(1.25); } }
+                            IconBtn { size: 30px; commands: "M 12 5 L 12 19 M 5 12 L 19 12"; clicked => { root.rig-zoom(0.8); } }
+                            Btn { label: "Reset view"; height: 30px; font-size: 11px; mono: true; clicked => { root.rig-reset-view(); } }
+                        }
+
+                        // clip list (rig only)
+                        if root.rig-has-3d && root.clips.length > 0 : Rectangle {
+                            height: 92px;
+                            background: Theme.surface-2;
+                            border-width: 1px;
+                            border-color: Theme.border;
+                            border-radius: 8px;
+                            clip: true;
+                            clips-flick := Flickable {
+                                content-width: clips-flick.width;
+                                content-height: max(clips-flick.height, root.clips.length * 30px);
+                                VerticalLayout {
+                                    width: clips-flick.width;
+                                    padding: 4px;
+                                    spacing: 2px;
+                                    for c[i] in root.clips : Rectangle {
+                                        height: 28px;
+                                        background: (i == root.rig-clip-index) ? Theme.accent : (clip-ta.has-hover ? Theme.hover : transparent);
+                                        border-radius: 5px;
+                                        clip-ta := TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => { root.rig-select-clip(i); }
+                                        }
+                                        Text {
+                                            x: 10px; y: 0px;
+                                            width: parent.width - 20px;
+                                            height: parent.height;
+                                            text: c.name;
+                                            color: (i == root.rig-clip-index) ? Theme.accent-fg : Theme.text-dim;
+                                            font-family: "Cascadia Mono";
+                                            font-size: 11px;
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // filmstrip
+                        if !root.stage-active() && root.slides.length > 1 : Rectangle {
+                            height: 86px;
+                            background: Theme.surface-2;
+                            border-width: 1px;
+                            border-color: Theme.border;
+                            border-radius: 8px;
+                            clip: true;
+                            strip := Flickable {
+                                content-width: max(strip.width, root.slides.length * 84px + 8px);
+                                content-height: strip.height;
+                                HorizontalLayout {
+                                    width: max(strip.width, root.slides.length * 84px + 8px);
+                                    padding: 6px;
+                                    spacing: 6px;
+                                    // fixed-width tiles: centre them when they fit. When they
+                                    // overflow the free space is 0, so this degrades to a
+                                    // left-aligned scroll strip instead of pushing tiles out of reach.
+                                    alignment: center;
+                                    for s[i] in root.slides : Rectangle {
+                                        width: 76px;
+                                        background: s.active ? Theme.accent : (s-ta.has-hover ? Theme.hover : transparent);
+                                        animate background { duration: 150ms; easing: ease-out; }
+                                        border-width: 1px;
+                                        border-color: s.active ? Theme.accent : Theme.border;
+                                        animate border-color { duration: 150ms; easing: ease-out; }
+                                        border-radius: 6px;
+                                        s-ta := TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => { root.detail-select-slide(i); }
+                                        }
+                                        VerticalLayout {
+                                            padding: 4px;
+                                            spacing: 3px;
+                                            Rectangle {
+                                                height: 44px;
+                                                background: s.active ? Theme.surface : Theme.well;
+                                                animate background { duration: 150ms; easing: ease-out; }
+                                                border-radius: 4px;
+                                                clip: true;
+                                                Image { source: s.thumb; image-fit: contain; }
+                                            }
+                                            Text {
+                                                text: s.label;
+                                                font-family: "Cascadia Mono";
+                                                font-size: 9px;
+                                                color: s.active ? Theme.accent-fg : Theme.text-dim;
+                                                horizontal-alignment: center;
+                                                vertical-alignment: center;
+                                                height: 13px;
+                                                overflow: elide;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ---- spec pane (30%) ----
+                Rectangle {
+                    horizontal-stretch: 3;
+                    max-width: parent.width * 0.3;
+                    background: Theme.surface;
+                    Rectangle { x: 0px; width: 1px; height: parent.height; background: Theme.divider; }
+                    VerticalLayout {
+                        width: parent.width;
+                        height: parent.height;
+                        spacing: 0px;
+
+                        // head
+                        VerticalLayout {
+                            padding-left: 16px;
+                            padding-right: 16px;
+                            padding-top: 14px;
+                            padding-bottom: 14px;
+                            spacing: 8px;
+                            HorizontalLayout {
+                                height: 28px;
+                                spacing: 8px;
+                                Text {
+                                    text: "ASSET DETAILS";
+                                    font-family: "Cascadia Mono";
+                                    font-size: 10px;
+                                    letter-spacing: 1.2px;
+                                    color: Theme.text-faint;
+                                    horizontal-stretch: 1;
+                                    vertical-alignment: center;
+                                }
+                                IconBtn {
+                                    size: 28px;
+                                    commands: "M 5 5 L 19 19 M 19 5 L 5 19";
+                                    clicked => { root.close-detail(); }
+                                }
+                            }
+                            HorizontalLayout {
+                                height: 22px;
+                                Plate { label: root.detail-code; height: 22px; }
+                                Rectangle { horizontal-stretch: 1; }
+                            }
+                            Text {
+                                text: root.detail-slug;
+                                font-family: "Arial";
+                                font-size: 16px;
+                                font-weight: 600;
+                                color: Theme.text;
+                                height: 22px;
+                                vertical-alignment: center;
+                                overflow: elide;
+                            }
+                            Text {
+                                text: root.detail-category;
+                                font-family: "Arial";
+                                font-size: 12px;
+                                color: Theme.text-faint;
+                                height: 15px;
+                                vertical-alignment: center;
+                                overflow: elide;
+                            }
+                        }
+                        HLine { }
+
+                        // body
+                        body := Flickable {
+                            vertical-stretch: 1;
+                            content-width: self.width;
+                            content-height: max(body.height, root.spec.length * 22px + 340px);
+                            VerticalLayout {
+                                width: body.width;
+                                padding-left: 16px;
+                                padding-right: 16px;
+                                padding-top: 14px;
+                                padding-bottom: 12px;
+                                spacing: 4px;
+
+                                Text {
+                                    text: "SPECS";
+                                    font-family: "Cascadia Mono";
+                                    font-size: 10px;
+                                    letter-spacing: 1.2px;
+                                    color: Theme.text-faint;
+                                    height: 16px;
+                                    vertical-alignment: center;
+                                }
+                                for s in root.spec : HorizontalLayout {
+                                    height: 22px;
+                                    spacing: 12px;
+                                    Text {
+                                        text: s.k;
+                                        font-family: "Cascadia Mono";
+                                        font-size: 10px;
+                                        letter-spacing: 0.6px;
+                                        color: Theme.text-faint;
+                                        width: 96px;
+                                        vertical-alignment: center;
+                                        overflow: elide;
+                                    }
+                                    Text {
+                                        text: s.v;
+                                        font-family: "Cascadia Mono";
+                                        font-size: 12px;
+                                        color: Theme.text;
+                                        horizontal-stretch: 1;
+                                        vertical-alignment: center;
+                                        overflow: elide;
+                                    }
+                                }
+
+                                Rectangle { height: 12px; }
+                                HLine { }
+
+                                Text {
+                                    text: "CATEGORY";
+                                    font-family: "Cascadia Mono";
+                                    font-size: 10px;
+                                    letter-spacing: 1.2px;
+                                    color: Theme.text-faint;
+                                    height: 24px;
+                                    vertical-alignment: center;
+                                }
+                                HorizontalLayout {
+                                    height: 34px;
+                                    spacing: 8px;
+                                    l1-edit := Pick {
+                                        horizontal-stretch: 1;
+                                        value: root.edit-l1-options.length > 0 && root.edit-l1-index >= 0 && root.edit-l1-index < root.edit-l1-options.length ? root.edit-l1-options[root.edit-l1-index] : "";
+                                        open: root.pick-open == 4;
+                                        clicked => { root.pick-open = root.pick-open == 4 ? -1 : 4; }
+                                    }
+                                    l2-edit := Pick {
+                                        horizontal-stretch: 1;
+                                        value: root.edit-l2-options.length > 0 && root.edit-l2-index >= 0 && root.edit-l2-index < root.edit-l2-options.length ? root.edit-l2-options[root.edit-l2-index] : "";
+                                        open: root.pick-open == 5;
+                                        clicked => { root.pick-open = root.pick-open == 5 ? -1 : 5; }
+                                    }
+                                }
+
+                                Rectangle { height: 10px; }
+                                HLine { }
+
+                                Text {
+                                    text: "TAGS";
+                                    font-family: "Cascadia Mono";
+                                    font-size: 10px;
+                                    letter-spacing: 1.2px;
+                                    color: Theme.text-faint;
+                                    height: 24px;
+                                    vertical-alignment: center;
+                                }
+                                tag-strip := Flickable {
+                                    height: 30px;
+                                    content-width: max(tag-strip.width, root.edit-tags.length * 100px + 8px);
+                                    content-height: tag-strip.height;
+                                    HorizontalLayout {
+                                        width: max(tag-strip.width, root.edit-tags.length * 100px + 8px);
+                                        spacing: 6px;
+                                        alignment: start;
+                                        for t in root.edit-tags : TagChip {
+                                            label: t;
+                                            removable: true;
+                                            height: 24px;
+                                            removed => { root.detail-remove-tag(t); }
+                                        }
+                                    }
+                                }
+                                HorizontalLayout {
+                                    height: 34px;
+                                    spacing: 8px;
+                                    Rectangle {
+                                        horizontal-stretch: 1;
+                                        height: parent.height;
+                                        background: Theme.surface-2;
+                                        border-width: 1px;
+                                        border-color: Theme.border;
+                                        border-radius: 6px;
+                                        TextInput {
+                                            x: 10px; y: 0px;
+                                            width: parent.width - 20px;
+                                            height: parent.height;
+                                            text <=> root.edit-tag-input;
+                                            color: Theme.text;
+                                            font-family: "Arial";
+                                            font-size: 12px;
+                                            single-line: true;
+                                            vertical-alignment: center;
+                                            edited => { }
+                                            accepted => { root.detail-add-tag(root.edit-tag-input); }
+                                        }
+                                    }
+                                    Btn { label: "Add"; width: 54px; height: 34px; font-size: 12px; clicked => { root.detail-add-tag(root.edit-tag-input); } }
+                                }
+
+                                Rectangle { height: 12px; }
+                                Btn {
+                                    label: root.edit-busy ? "Saving..." : "Save";
+                                    primary: true;
+                                    height: 34px;
+                                    enabled: root.edit-dirty && !root.edit-busy;
+                                    clicked => { root.detail-save(); }
+                                }
+                            }
+                        }
+                        HLine { }
+
+                        // foot
+                        VerticalLayout {
+                            padding-left: 16px;
+                            padding-right: 16px;
+                            padding-top: 14px;
+                            padding-bottom: 14px;
+                            spacing: 8px;
+                            if root.detail-kind == "material" : Btn { label: "Send to Painter"; primary: true; height: 42px; font-size: 14px; clicked => { root.detail-painter(); } }
+                            if root.detail-kind != "material" : Btn {
+                                label: root.stage-active() ? "Open in Blender" : "Open in Blender";
+                                primary: true;
+                                height: 42px;
+                                font-size: 14px;
+                                clicked => { root.detail-blender(); }
+                            }
+                            Btn { label: "Place in Unity"; height: 34px; clicked => { root.detail-unity(); } }
+                            HorizontalLayout {
+                                height: 34px;
+                                spacing: 8px;
+                                Btn { label: "Refresh"; horizontal-stretch: 1; height: 34px; clicked => { root.detail-refresh(); } }
+                                Btn { label: root.delete-armed ? "Click again" : "Delete asset"; danger: true; horizontal-stretch: 1; height: 34px; clicked => { root.detail-delete(); } }
+                            }
+                        }
+                    }
+                }
+            }
+            if root.pick-open == 4 || root.pick-open == 5 : Rectangle {
+                width: parent.width;
+                height: parent.height;
+                background: transparent;
+                TouchArea { clicked => { root.pick-open = -1; } }
+                Rectangle {
+                    x: (root.pick-open == 4 ? l1-edit.absolute-position.x : l2-edit.absolute-position.x) - sheet.absolute-position.x;
+                    y: (root.pick-open == 4 ? l1-edit.absolute-position.y : l2-edit.absolute-position.y) - sheet.absolute-position.y + 38px;
+                    width: root.pick-open == 4 ? l1-edit.width : l2-edit.width;
+                    height: ((root.pick-open == 4 ? root.edit-l1-options.length : root.edit-l2-options.length) * 32px) + 8px;
+                    background: Theme.surface;
+                    border-width: 1px;
+                    border-color: Theme.border-strong;
+                    border-radius: 8px;
+                    clip: true;
+                    VerticalLayout {
+                        x: 4px;
+                        y: 4px;
+                        width: parent.width - 8px;
+                        height: parent.height - 8px;
+                        spacing: 0px;
+                        for o[i] in (root.pick-open == 4 ? root.edit-l1-options : root.edit-l2-options) : Rectangle {
+                            height: 32px;
+                            background: cat-ta.has-hover ? Theme.accent : transparent;
+                            animate background { duration: 110ms; easing: ease-out; }
+                            border-radius: 5px;
+                            cat-ta := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { root.pick-select(i); }
+                            }
+                            Text {
+                                x: 10px;
+                                y: 0px;
+                                width: parent.width - 20px;
+                                height: parent.height;
+                                text: o;
+                                color: cat-ta.has-hover ? Theme.accent-fg : Theme.text;
+                                font-family: "Arial";
+                                font-size: 13px;
+                                vertical-alignment: center;
+                                overflow: elide;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ============ cart drawer ============
+    if root.cart-open : Rectangle {
+        width: root.width;
+        height: root.height;
+        background: Theme.overlay;
+        TouchArea { clicked => { root.close-cart(); } }
+        Rectangle {
+            x: root.width - self.width;
+            y: 0px;
+            width: min(440px, root.width);
+            height: root.height;
+            background: Theme.surface;
+            border-width: 1px;
+            border-color: Theme.border-strong;
+            TouchArea { }
+
+            property <length> foot-h: 158px;
+
+            // ---- head (fixed) ----
+            Rectangle {
+                x: 0px;
+                y: 0px;
+                width: parent.width;
+                height: 78px;
+                background: transparent;
+                VerticalLayout {
+                    padding-left: 20px;
+                    padding-right: 14px;
+                    padding-top: 16px;
+                    padding-bottom: 14px;
+                    spacing: 8px;
+                    Text {
+                        text: "SELECTION";
+                        font-family: "Cascadia Mono";
+                        font-size: 10px;
+                        letter-spacing: 1.4px;
+                        color: Theme.text-faint;
+                        height: 12px;
+                        vertical-alignment: center;
+                    }
+                    HorizontalLayout {
+                        height: 34px;
+                        spacing: 10px;
+                        Text {
+                            text: "CART";
+                            font-family: "Haettenschweiler";
+                            font-size: 28px;
+                            letter-spacing: -0.6px;
+                            color: Theme.text;
+                            horizontal-stretch: 1;
+                            vertical-alignment: center;
+                        }
+                        Plate { label: root.cart-count; height: 22px; }
+                        IconBtn {
+                            size: 30px;
+                            commands: "M 5 5 L 19 19 M 19 5 L 5 19";
+                            clicked => { root.close-cart(); }
+                        }
+                    }
+                }
+            }
+            Rectangle { x: 0px; y: 78px; width: parent.width; height: 1px; background: Theme.divider; }
+
+            // ---- list (fills the middle) ----
+            Rectangle {
+                x: 0px;
+                y: 79px;
+                width: parent.width;
+                height: parent.height - 79px - parent.foot-h;
+                background: transparent;
+                clip: true;
+                if root.cart.length == 0 : Text {
+                    text: "Cart is empty";
+                    font-family: "Arial";
+                    font-size: 13px;
+                    color: Theme.text-faint;
+                    width: parent.width;
+                    height: 120px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+                cart-body := Flickable {
+                    width: parent.width;
+                    height: parent.height;
+                    content-width: self.width;
+                    content-height: max(cart-body.height, root.cart.length * 64px);
+                    VerticalLayout {
+                        width: cart-body.width;
+                        for c[i] in root.cart : CartLine {
+                            code: c.code;
+                            slug: c.slug;
+                            category: c.category;
+                            idx: c.idx;
+                            thumb: c.thumb;
+                            open => { root.cart-open-detail(c.code); }
+                            remove => { root.cart-remove(c.code); }
+                            if i < root.cart.length - 1 : Rectangle {
+                                x: 16px;
+                                y: parent.height - 1px;
+                                width: parent.width - 32px;
+                                height: 1px;
+                                background: Theme.divider;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ---- foot (pinned to the bottom) ----
+            Rectangle {
+                x: 0px;
+                y: parent.height - parent.foot-h;
+                width: parent.width;
+                height: parent.foot-h;
+                background: Theme.surface;
+                Rectangle { x: 0px; y: 0px; width: parent.width; height: 1px; background: Theme.divider; }
+                VerticalLayout {
+                    padding-left: 20px;
+                    padding-right: 20px;
+                    padding-top: 16px;
+                    padding-bottom: 18px;
+                    spacing: 10px;
+                    Btn {
+                        label: "Export codes";
+                        primary: true;
+                        height: 42px;
+                        font-size: 14px;
+                        enabled: root.cart-count > 0;
+                        clicked => { root.cart-export(); }
+                    }
+                    Btn { label: "Add all filtered"; height: 36px; clicked => { root.cart-select-all-filtered(); } }
+                    Btn { label: "Clear"; danger: true; height: 36px; enabled: root.cart-count > 0; clicked => { root.cart-clear(); } }
+                }
+            }
+        }
+    }
+
+    // ============ bridge dialogs ============
+    // ============ bridge dialogs ============
+    if root.blender-open : Rectangle {
+        width: root.width;
+        height: root.height;
+        background: Theme.overlay;
+        TouchArea { clicked => { root.blender-close(); } }
+        Rectangle {
+            x: (root.width - self.width) / 2;
+            y: (root.height - self.height) / 2;
+            width: min(root.width - 48px, 600px);
+            height: 486px;
+            background: Theme.surface;
+            border-width: 1px;
+            border-color: Theme.border-strong;
+            border-radius: 12px;
+            clip: true;
+            TouchArea { }
+            VerticalLayout {
+                width: parent.width;
+                height: parent.height;
+                spacing: 0px;
+                DialogHead { eyebrow: "BLENDER"; title: "Send to Blender"; closed => { root.blender-close(); } }
+                HLine { }
+                VerticalLayout {
+                    vertical-stretch: 1;
+                    padding-left: 20px;
+                    padding-right: 20px;
+                    padding-top: 18px;
+                    padding-bottom: 18px;
+                    spacing: 14px;
+                    BridgeStatus { state: root.blender-state; text: root.blender-status; recheck => { root.check-bridge("blender"); } }
+                    DialogField { caption: "LIBRARY ROOT PATH"; value <=> root.blender-root; edited(t) => { root.blender-config(root.blender-root, root.blender-base); } }
+                    DialogField { caption: "ADDON ADDRESS (HOST:PORT)"; value <=> root.blender-base; edited(t) => { root.blender-config(root.blender-root, root.blender-base); } }
+                    Text {
+                        text: "Blender must be open with the Blender MCP addon enabled. Import uses the open Blender; Open in new window launches a fresh instance.";
+                        color: Theme.text-faint;
+                        font-family: "Arial";
+                        font-size: 12px;
+                        wrap: word-wrap;
+                    }
+                    Rectangle { vertical-stretch: 1; background: transparent; }
+                }
+                HLine { }
+                HorizontalLayout {
+                    height: 74px;
+                    padding-left: 20px;
+                    padding-right: 20px;
+                    padding-top: 18px;
+                    padding-bottom: 18px;
+                    spacing: 10px;
+                    alignment: end;
+                    Btn { label: "New window"; height: 38px; clicked => { root.blender-send("open"); } }
+                    Btn { label: "Import cart"; primary: true; height: 38px; font-size: 13px; clicked => { root.blender-send("import"); } }
+                }
+            }
+        }
+    }
+
+    if root.unity-open : Rectangle {
+        width: root.width;
+        height: root.height;
+        background: Theme.overlay;
+        TouchArea { clicked => { root.unity-close(); } }
+        Rectangle {
+            x: (root.width - self.width) / 2;
+            y: (root.height - self.height) / 2;
+            width: min(root.width - 48px, 600px);
+            height: 372px;
+            background: Theme.surface;
+            border-width: 1px;
+            border-color: Theme.border-strong;
+            border-radius: 12px;
+            clip: true;
+            TouchArea { }
+            VerticalLayout {
+                width: parent.width;
+                height: parent.height;
+                spacing: 0px;
+                DialogHead { eyebrow: "UNITY"; title: "Place in Unity"; closed => { root.unity-close(); } }
+                HLine { }
+                VerticalLayout {
+                    vertical-stretch: 1;
+                    padding-left: 20px;
+                    padding-right: 20px;
+                    padding-top: 18px;
+                    padding-bottom: 18px;
+                    spacing: 14px;
+                    BridgeStatus { state: root.unity-state; text: root.unity-status; recheck => { root.check-bridge("unity"); } }
+                    DialogField { caption: "MCP ENDPOINT"; value <=> root.unity-base; edited(t) => { root.unity-config(root.unity-base); } }
+                    Text {
+                        text: "Unity must be running with the MCP bridge enabled. Place puts the cart into the open scene; Sync re-reads the manifest; Export writes the scene back.";
+                        color: Theme.text-faint;
+                        font-family: "Arial";
+                        font-size: 12px;
+                        wrap: word-wrap;
+                    }
+                    Rectangle { vertical-stretch: 1; background: transparent; }
+                }
+                HLine { }
+                HorizontalLayout {
+                    height: 74px;
+                    padding-left: 20px;
+                    padding-right: 20px;
+                    padding-top: 18px;
+                    padding-bottom: 18px;
+                    spacing: 10px;
+                    alignment: end;
+                    Btn { label: "Sync"; height: 38px; clicked => { root.unity-action("sync"); } }
+                    Btn { label: "Export"; height: 38px; clicked => { root.unity-action("export"); } }
+                    Btn { label: "Place cart"; primary: true; height: 38px; font-size: 13px; clicked => { root.unity-place-cart(); } }
+                }
+            }
+        }
+    }
+
+    if root.painter-open : Rectangle {
+        width: root.width;
+        height: root.height;
+        background: Theme.overlay;
+        TouchArea { clicked => { root.painter-close(); } }
+        Rectangle {
+            x: (root.width - self.width) / 2;
+            y: (root.height - self.height) / 2;
+            width: min(root.width - 48px, 600px);
+            height: 452px;
+            background: Theme.surface;
+            border-width: 1px;
+            border-color: Theme.border-strong;
+            border-radius: 12px;
+            clip: true;
+            TouchArea { }
+            VerticalLayout {
+                width: parent.width;
+                height: parent.height;
+                spacing: 0px;
+                DialogHead { eyebrow: "SUBSTANCE PAINTER"; title: "Send to Painter"; closed => { root.painter-close(); } }
+                HLine { }
+                VerticalLayout {
+                    vertical-stretch: 1;
+                    padding-left: 20px;
+                    padding-right: 20px;
+                    padding-top: 18px;
+                    padding-bottom: 18px;
+                    spacing: 14px;
+                    BridgeStatus { state: root.painter-state; text: root.painter-status; recheck => { root.check-bridge("painter"); } }
+                    DialogField { caption: "REMOTE-SCRIPTING ENDPOINT"; value <=> root.painter-base; edited(t) => { root.painter-config(root.painter-base, root.painter-base, root.painter-root); } }
+                    DialogField { caption: "LIBRARY ROOT PATH"; value <=> root.painter-root; edited(t) => { root.painter-config(root.painter-base, root.painter-base, root.painter-root); } }
+                    Text {
+                        text: "Start Painter with --enable-remote-scripting (port 60041). Import sends the cart's texture files into the open project or session; Open project creates one from the asset's FBX.";
+                        color: Theme.text-faint;
+                        font-family: "Arial";
+                        font-size: 12px;
+                        wrap: word-wrap;
+                    }
+                    Rectangle { vertical-stretch: 1; background: transparent; }
+                }
+                HLine { }
+                HorizontalLayout {
+                    height: 74px;
+                    padding-left: 20px;
+                    padding-right: 20px;
+                    padding-top: 18px;
+                    padding-bottom: 18px;
+                    spacing: 10px;
+                    alignment: end;
+                    Btn { label: "Open project"; height: 38px; clicked => { root.painter-send("open"); } }
+                    Btn { label: "Import"; primary: true; height: 38px; font-size: 13px; clicked => { root.painter-send("import"); } }
+                }
+            }
+        }
+    }
+    // ============ toast ============
+    // Always instantiated (a single pill + text), hidden by opacity so the
+    // slide-up + fade-in and reverse can animate. No TouchArea: an invisible
+    // toast must never intercept input.
+    Rectangle {
+        x: root.width - self.width - 20px;
+        y: root.height - self.height - 20px + (root.toast-open ? 0px : 12px);
+        width: min(toast-row.preferred-width, min(560px, root.width - 40px));
+        height: 40px;
+        opacity: root.toast-open ? 1 : 0;
+        background: root.toast-tone == "ok" ? Theme.ok
+                  : root.toast-tone == "error" ? Theme.danger
+                  : Theme.text;
+        border-radius: 8px;
+        animate opacity { duration: 220ms; easing: ease-out-quart; }
+        animate y { duration: 220ms; easing: ease-out-quart; }
+        toast-row := HorizontalLayout {
+            padding-left: 16px;
+            padding-right: 16px;
+            alignment: center;
+            Text {
+                text: root.toast-text;
+                color: Theme.accent-fg;
+                font-family: "Arial";
+                font-size: 13px;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+    }
+    // ============ pick popup (above the grid) ============
+    // ============ toolbar pick popup (0..3) ============
+    if (root.pick-open >= 0 && root.pick-open <= 3) || root.pick-open == 6 : Rectangle {
+        width: root.width;
+        height: root.height;
+        background: transparent;
+        TouchArea { clicked => { root.pick-open = -1; } }
+        Rectangle {
+            x: root.pick-open == 0 ? l1-pick.absolute-position.x
+             : root.pick-open == 1 ? l2-pick.absolute-position.x
+             : root.pick-open == 2 ? sort-pick.absolute-position.x
+             : root.pick-open == 3 ? style-pick.absolute-position.x
+             : pagesize-pick.absolute-position.x;
+            y: (root.pick-open == 0 ? l1-pick.absolute-position.y
+              : root.pick-open == 1 ? l2-pick.absolute-position.y
+              : root.pick-open == 2 ? sort-pick.absolute-position.y
+              : root.pick-open == 3 ? style-pick.absolute-position.y
+              : pagesize-pick.absolute-position.y) + 38px;
+            width: (root.pick-open == 2 || root.pick-open == 3) ? 130px
+                 : root.pick-open == 6 ? 120px
+                 : 150px;
+            height: ((root.pick-open == 0 ? root.l1-options.length
+                    : root.pick-open == 1 ? root.l2-options.length
+                    : root.pick-open == 2 ? root.sort-options.length
+                    : root.pick-open == 3 ? root.style-options.length
+                    : root.page-sizes.length) * 32px) + 8px;
+            background: Theme.surface;
+            border-width: 1px;
+            border-color: Theme.border-strong;
+            border-radius: 8px;
+            clip: true;
+            VerticalLayout {
+                x: 4px; y: 4px;
+                width: parent.width - 8px;
+                height: parent.height - 8px;
+                spacing: 0px;
+                for o[i] in (root.pick-open == 0 ? root.l1-options
+                           : root.pick-open == 1 ? root.l2-options
+                           : root.pick-open == 2 ? root.sort-options
+                           : root.pick-open == 3 ? root.style-options
+                           : root.page-size-labels) : Rectangle {
+                    height: 32px;
+                    background: row-ta.has-hover ? Theme.accent : transparent;
+                    animate background { duration: 110ms; easing: ease-out; }
+                    border-radius: 5px;
+                    row-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.pick-select(i); }
+                    }
+                    Text {
+                        x: 10px; y: 0px;
+                        width: parent.width - 20px;
+                        height: parent.height;
+                        text: o;
+                        color: row-ta.has-hover ? Theme.accent-fg : Theme.text;
+                        font-family: "Arial";
+                        font-size: 13px;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                }
+            }
+        }
+    }
+
+}

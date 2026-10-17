@@ -1,0 +1,18 @@
+# Rust build output — this directory is ~11 GB locally; never commit it.
+/target/
+
+# Packaged release artifacts (the zip is published as a GitHub Release asset).
+/dist/
+
+# Local runtime state. The app writes this under %APPDATA%\asset-library-desktop\,
+# but guard against a copy being dropped next to the sources.
+store.json
+
+# OS / editor noise
+Thumbs.db
+Desktop.ini
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.rs.bk

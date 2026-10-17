@@ -1,0 +1,643 @@
+import { Theme } from "theme.slint";
+
+// ---------------------------------------------------------------------------
+// Primitives
+// ---------------------------------------------------------------------------
+
+// 24-unit stroke icon ported from the web SVG set.
+export component Icon inherits Path {
+    in property <color> tint: Theme.text-dim;
+    in property <length> size: 16px;
+    width: root.size;
+    height: root.size;
+    fill: transparent;
+    stroke: root.tint;
+    stroke-width: 1.7px;
+    viewbox-width: 24;
+    viewbox-height: 24;
+}
+
+// Pill: solid light-on-dark emphasis (codes, counts).
+export component Plate inherits Rectangle {
+    in property <string> label: "";
+    in property <bool> quiet: false;
+    background: root.quiet ? transparent : Theme.text;
+    animate background { duration: 110ms; easing: ease-out; }
+    border-width: root.quiet ? 1px : 0px;
+    border-color: Theme.border;
+    border-radius: self.height / 2;
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        alignment: center;
+        Text {
+            text: root.label;
+            color: root.quiet ? Theme.text-dim : Theme.accent-fg;
+            font-family: "Cascadia Mono";
+            font-size: 11.5px;
+            font-weight: 500;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+}
+
+export component HLine inherits Rectangle {
+    height: 1px;
+    background: Theme.divider;
+}
+
+// Text button: quiet by default, accent-filled when primary.
+export component Btn inherits Rectangle {
+    in property <string> label: "";
+    in property <bool> primary: false;
+    in property <bool> danger: false;
+    in property <bool> enabled: true;
+    in property <bool> mono: false;
+    in property <length> font-size: 13px;
+    callback clicked();
+    min-height: 32px;
+    border-radius: 6px;
+    border-width: 1px;
+    border-color: root.primary ? Theme.accent : (ta.has-hover ? Theme.border-strong : Theme.border);
+    opacity: root.enabled ? 1 : 0.4;
+    background: root.primary ? (ta.pressed ? Theme.accent.darker(10%) : Theme.accent)
+              : (ta.has-hover ? Theme.hover : transparent);
+    transform-scale-x: ta.pressed ? 0.97 : 1.0;
+    transform-scale-y: ta.pressed ? 0.97 : 1.0;
+    animate transform-scale-x { duration: 90ms; easing: ease-out; }
+    animate transform-scale-y { duration: 90ms; easing: ease-out; }
+    animate background { duration: 110ms; easing: ease-out; }
+    animate border-color { duration: 110ms; easing: ease-out; }
+    animate opacity { duration: 110ms; easing: ease-out; }
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        alignment: center;
+        Text {
+            text: root.label;
+            color: root.primary ? Theme.accent-fg : (root.danger ? Theme.danger : Theme.text);
+            font-family: root.mono ? "Cascadia Mono" : "Arial";
+            font-size: root.font-size;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+}
+
+// Square icon button (card actions, topbar, window controls).
+export component IconBtn inherits Rectangle {
+    in property <string> commands: "";
+    in property <color> tint: Theme.text-dim;
+    in property <bool> active: false;
+    in property <bool> danger: false;
+    in property <bool> enabled: true;
+    in property <length> size: 32px;
+    callback clicked();
+    width: root.size;
+    height: root.size;
+    border-radius: 6px;
+    border-width: 1px;
+    border-color: root.active ? Theme.accent : (ta.has-hover ? Theme.border-strong : transparent);
+    opacity: root.enabled ? 1 : 0.35;
+    background: root.active ? Theme.accent
+              : ta.has-hover ? (root.danger ? Theme.danger : Theme.hover)
+              : transparent;
+    transform-scale-x: ta.pressed ? 0.97 : 1.0;
+    transform-scale-y: ta.pressed ? 0.97 : 1.0;
+    animate transform-scale-x { duration: 90ms; easing: ease-out; }
+    animate transform-scale-y { duration: 90ms; easing: ease-out; }
+    animate background { duration: 110ms; easing: ease-out; }
+    animate border-color { duration: 110ms; easing: ease-out; }
+    animate opacity { duration: 110ms; easing: ease-out; }
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+    Icon {
+        x: (root.width - self.width) / 2;
+        y: (root.height - self.height) / 2;
+        size: root.size / 2;
+        commands: root.commands;
+        tint: root.active ? Theme.accent-fg
+            : ta.has-hover && root.danger ? #FFFFFF
+            : ta.has-hover ? Theme.text
+            : root.tint;
+    }
+}
+
+// Tab: label + count pill; the active tab is a solid light block.
+export component Tab inherits Rectangle {
+    in property <string> label: "";
+    in property <bool> active: false;
+    callback clicked();
+    height: 34px;
+    border-radius: 6px;
+    border-width: 1px;
+    border-color: root.active ? Theme.text : Theme.border;
+    background: root.active ? Theme.text : (ta.has-hover ? Theme.hover : transparent);
+    animate background { duration: 150ms; easing: ease-out; }
+    animate border-color { duration: 150ms; easing: ease-out; }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        spacing: 8px;
+        alignment: center;
+        Text {
+            text: root.label;
+            color: root.active ? Theme.accent-fg : Theme.text-dim;
+            animate color { duration: 150ms; easing: ease-out; }
+            font-family: "Arial";
+            font-size: 13px;
+            font-weight: 500;
+            vertical-alignment: center;
+        }
+    }
+}
+
+// Topbar bridge trigger: one button, brand icon centred, state dot as a badge.
+export component StatusIconBtn inherits Rectangle {
+    in property <string> commands: "";
+    in property <color> tint: Theme.text;
+    in property <string> state: "checking";
+    callback clicked();
+    width: 36px;
+    height: 36px;
+    border-radius: 7px;
+    border-width: 1px;
+    border-color: ta.has-hover ? Theme.border-strong : transparent;
+    background: ta.has-hover ? Theme.hover : transparent;
+    animate background { duration: 110ms; easing: ease-out; }
+    animate border-color { duration: 110ms; easing: ease-out; }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+    Icon {
+        x: (root.width - self.width) / 2;
+        y: (root.height - self.height) / 2;
+        size: 18px;
+        commands: root.commands;
+        tint: ta.has-hover ? root.tint : root.tint.mix(Theme.text-dim, 0.35);
+    }
+    // status badge
+    Rectangle {
+        x: root.width - 12px;
+        y: 4px;
+        width: 8px;
+        height: 8px;
+        border-radius: 4px;
+        border-width: 1px;
+        border-color: Theme.window-bg;
+        background: root.state == "ok" ? Theme.ok : Theme.text-faint;
+        animate background { duration: 180ms; easing: ease-out; }
+    }
+}
+
+// Custom select (matches a dark combobox).
+export component Pick inherits Rectangle {
+    in property <string> value: "";
+    in property <bool> enabled: true;
+    in property <bool> open: false;
+    callback clicked();
+    height: 34px;
+    background: Theme.surface-2;
+    border-width: 1px;
+    border-color: root.open ? Theme.accent : (ta.has-hover ? Theme.border-strong : Theme.border);
+    animate border-color { duration: 150ms; easing: ease-out; }
+    border-radius: 6px;
+    opacity: root.enabled ? 1 : 0.4;
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+    Text {
+        x: 11px;
+        y: 0px;
+        width: parent.width - 40px;
+        height: parent.height;
+        text: root.value;
+        color: (root.enabled && ta.has-hover) ? Theme.text : Theme.text-dim;
+        animate color { duration: 150ms; easing: ease-out; }
+        font-family: "Arial";
+        font-size: 13px;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    Path {
+        x: parent.width - 20px;
+        y: 14px;
+        width: 10px;
+        height: 6px;
+        fill: transparent;
+        stroke: Theme.text-dim;
+        animate stroke { duration: 150ms; easing: ease-out; }
+        stroke-width: 1.4px;
+        commands: "M 1 1 L 5 5 L 9 1";
+    }
+}
+
+// Uppercase mono tag chip.
+export component TagChip inherits Rectangle {
+    in property <string> label: "";
+    in property <bool> removable: false;
+    callback clicked();
+    callback removed();
+    min-height: 22px;
+    background: ta.has-hover ? Theme.hover : Theme.surface-2;
+    animate background { duration: 110ms; easing: ease-out; }
+    border-width: 1px;
+    border-color: ta.has-hover ? Theme.border-strong : Theme.border;
+    animate border-color { duration: 110ms; easing: ease-out; }
+    border-radius: 5px;
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+    HorizontalLayout {
+        padding-left: 7px;
+        padding-right: 7px;
+        spacing: 5px;
+        alignment: center;
+        Text {
+            text: root.label.to-uppercase();
+            color: Theme.text-dim;
+            font-family: "Cascadia Mono";
+            font-size: 10px;
+            letter-spacing: 0.6px;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        if root.removable : Rectangle {
+            width: 14px;
+            background: transparent;
+            close-ta := TouchArea {
+                y: (parent.height - 14px) / 2;
+                width: 14px;
+                height: 14px;
+                mouse-cursor: pointer;
+                clicked => { root.removed(); }
+            }
+            Path {
+                x: (parent.width - 12px) / 2;
+                y: (parent.height - 12px) / 2;
+                width: 12px;
+                height: 12px;
+                fill: transparent;
+                stroke: close-ta.has-hover ? Theme.danger : Theme.text-faint;
+                animate stroke { duration: 110ms; easing: ease-out; }
+                stroke-width: 1.7px;
+                viewbox-width: 12;
+                viewbox-height: 12;
+                commands: "M 2.5 2.5 L 9.5 9.5 M 9.5 2.5 L 2.5 9.5";
+            }
+        }
+    }
+}
+
+// Shared dialog chrome: eyebrow + display title + close (X).
+export component DialogHead inherits Rectangle {
+    in property <string> eyebrow: "";
+    in property <string> title: "";
+    callback closed();
+    height: 74px;
+    background: transparent;
+    VerticalLayout {
+        padding-left: 20px;
+        padding-right: 14px;
+        padding-top: 13px;
+        padding-bottom: 13px;
+        spacing: 6px;
+        Text {
+            text: root.eyebrow;
+            font-family: "Cascadia Mono";
+            font-size: 10px;
+            letter-spacing: 1.4px;
+            color: Theme.text-faint;
+            height: 12px;
+            vertical-alignment: center;
+        }
+        HorizontalLayout {
+            height: 30px;
+            spacing: 10px;
+            Text {
+                text: root.title;
+                font-family: "Haettenschweiler";
+                font-size: 26px;
+                letter-spacing: -0.5px;
+                color: Theme.text;
+                horizontal-stretch: 1;
+                vertical-alignment: center;
+            }
+            IconBtn {
+                size: 30px;
+                commands: "M 5 5 L 19 19 M 19 5 L 5 19";
+                clicked => { root.closed(); }
+            }
+        }
+    }
+}
+
+// Connection state card: dot + message + recheck.
+export component BridgeStatus inherits Rectangle {
+    in property <string> state: "checking";
+    in property <string> text: "";
+    callback recheck();
+    height: 50px;
+    background: transparent;
+    HorizontalLayout {
+        width: parent.width;
+        height: parent.height;
+        spacing: 10px;
+        Rectangle {
+            horizontal-stretch: 1;
+            background: Theme.surface-2;
+            border-width: 1px;
+            border-color: Theme.border;
+            border-radius: 8px;
+            HorizontalLayout {
+                width: parent.width;
+                height: parent.height;
+                padding-left: 16px;
+                padding-right: 14px;
+                spacing: 12px;
+                Rectangle {
+                    width: 10px;
+                    Rectangle {
+                        y: (parent.height - 10px) / 2;
+                        width: 10px;
+                        height: 10px;
+                        border-radius: 5px;
+                        background: root.state == "ok" ? Theme.ok : Theme.text-faint;
+                        animate background { duration: 180ms; easing: ease-out; }
+                    }
+                }
+                Text {
+                    text: root.text;
+                    font-family: "Arial";
+                    font-size: 13px;
+                    color: Theme.text;
+                    horizontal-stretch: 1;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+            }
+        }
+        Btn {
+            width: 92px;
+            label: "Recheck";
+            font-size: 13px;
+            clicked => { root.recheck(); }
+        }
+    }
+}
+
+// Caption + text input.
+export component DialogField inherits VerticalLayout {
+    in property <string> caption: "";
+    in-out property <string> value: "";
+    callback edited(string);
+    spacing: 6px;
+    Text {
+        text: root.caption;
+        font-family: "Cascadia Mono";
+        font-size: 10px;
+        letter-spacing: 1.2px;
+        color: Theme.text-faint;
+        height: 14px;
+        vertical-alignment: center;
+    }
+    Rectangle {
+        height: 36px;
+        background: Theme.surface-2;
+        border-width: 1px;
+        border-color: Theme.border;
+        animate border-color { duration: 150ms; easing: ease-out; }
+        border-radius: 6px;
+        TextInput {
+            x: 12px;
+            y: 0px;
+            width: parent.width - 24px;
+            height: parent.height;
+            text <=> root.value;
+            color: Theme.text;
+            font-family: "Cascadia Mono";
+            font-size: 12px;
+            single-line: true;
+            vertical-alignment: center;
+            edited => { root.edited(self.text); }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Asset card
+// ---------------------------------------------------------------------------
+export component Card inherits Rectangle {
+    in property <string> code: "";
+    in property <string> slug: "";
+    in property <image> thumb;
+    in property <string> t1: "";
+    in property <string> t2: "";
+    in property <string> t3: "";
+    in property <bool> in-cart: false;
+    in property <int> kind: 0; // 0 model, 1 material, 2 rig
+    callback open();
+    callback cart();
+    callback copy();
+    callback blender();
+    callback unity();
+    callback painter();
+    callback tag(string);
+
+    background: root.in-cart ? Theme.surface-2 : (hover.has-hover ? Theme.surface-2 : Theme.surface);
+    border-width: 1px;
+    border-color: (hover.has-hover || root.in-cart) ? Theme.border-strong : Theme.border;
+    border-radius: 8px;
+    transform-scale-x: (hover.has-hover || root.in-cart) ? 1.012 : 1.0;
+    transform-scale-y: (hover.has-hover || root.in-cart) ? 1.012 : 1.0;
+    animate transform-scale-x { duration: 180ms; easing: ease-out; }
+    animate transform-scale-y { duration: 180ms; easing: ease-out; }
+    animate border-color { duration: 150ms; easing: ease-out; }
+    animate background { duration: 150ms; easing: ease-out; }
+    clip: true;
+
+    hover := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.open(); }
+    }
+
+    VerticalLayout {
+        spacing: 0px;
+        well := Rectangle {
+            height: self.width;
+            background: Theme.well;
+            clip: true;
+            Image {
+                x: 8px;
+                y: 8px;
+                width: parent.width - 16px;
+                height: parent.height - 16px;
+                source: root.thumb;
+                image-fit: contain;
+            }
+        }
+        VerticalLayout {
+            padding-left: 12px;
+            padding-right: 12px;
+            padding-top: 10px;
+            padding-bottom: 8px;
+            spacing: 8px;
+            HorizontalLayout {
+                height: 28px;
+                spacing: 2px;
+                alignment: center;
+                Plate { label: root.code; height: 20px; }
+                Rectangle { horizontal-stretch: 1; }
+                IconBtn {
+                    size: 28px;
+                    commands: root.in-cart ? "M 4.6 12.6 L 9.4 17.4 L 19.4 6.8" : "M 12 5.5 L 12 18.5 M 5.5 12 L 18.5 12";
+                    active: root.in-cart;
+                    clicked => { root.cart(); }
+                }
+                IconBtn {
+                    size: 28px;
+                    commands: "M 9 9 L 20.5 9 L 20.5 20.5 L 9 20.5 Z M 5.5 15 L 5.5 5.5 L 15 5.5";
+                    clicked => { root.copy(); }
+                }
+                if root.kind == 1 : IconBtn {
+                    size: 28px;
+                    commands: "M 12 4 L 17.7 6.3 L 20 12 L 17.7 17.7 L 12 20 L 6.3 17.7 L 4 12 L 6.3 6.3 Z M 12 9.5 L 12 10 M 15 13.5 L 15 14";
+                    tint: Theme.painter;
+                    clicked => { root.painter(); }
+                }
+                if root.kind != 1 : IconBtn {
+                    size: 28px;
+                    commands: "M 8 6 L 18.5 12 L 8 18 Z M 4 12 L 7 12";
+                    tint: Theme.blender;
+                    clicked => { root.blender(); }
+                }
+                IconBtn {
+                    size: 28px;
+                    commands: "M 12 2.9 L 20.4 8 L 20.4 16 L 12 21.1 L 3.6 16 L 3.6 8 Z M 3.6 8 L 12 13.1 L 20.4 8 M 12 13.1 L 12 21.1";
+                    tint: Theme.unity;
+                    clicked => { root.unity(); }
+                }
+            }
+            Text {
+                text: root.slug;
+                font-family: "Cascadia Mono";
+                font-size: 12px;
+                color: Theme.text-dim;
+                height: 16px;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+        VerticalLayout {
+            spacing: 0px;
+            HLine { }
+            Rectangle {
+                height: 38px;
+                HorizontalLayout {
+                    padding-left: 12px;
+                    padding-right: 12px;
+                    padding-top: 8px;
+                    padding-bottom: 8px;
+                    spacing: 4px;
+                    alignment: start;
+                    if root.t1 != "" : TagChip { label: root.t1; clicked => { root.tag(root.t1); } }
+                    if root.t2 != "" : TagChip { label: root.t2; clicked => { root.tag(root.t2); } }
+                    if root.t3 != "" : TagChip { label: root.t3; clicked => { root.tag(root.t3); } }
+                }
+            }
+        }
+    }
+}
+
+export component CartLine inherits Rectangle {
+    in property <string> code: "";
+    in property <string> slug: "";
+    in property <string> category: "";
+    in property <int> idx: 0;
+    in property <image> thumb;
+    callback open();
+    callback remove();
+    height: 64px;
+    background: row-ta.has-hover ? Theme.hover : transparent;
+    animate background { duration: 110ms; easing: ease-out; }
+    row-ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.open(); }
+    }
+    HorizontalLayout {
+        padding-left: 16px;
+        padding-right: 10px;
+        spacing: 12px;
+        Rectangle {
+            width: 44px;
+            height: 44px;
+            border-radius: 7px;
+            background: Theme.well;
+            border-width: 1px;
+            border-color: Theme.border;
+            clip: true;
+            Image {
+                x: 3px;
+                y: 3px;
+                width: parent.width - 6px;
+                height: parent.height - 6px;
+                source: root.thumb;
+                image-fit: contain;
+            }
+        }
+        VerticalLayout {
+            horizontal-stretch: 1;
+            spacing: 3px;
+            alignment: center;
+            Text {
+                text: root.code;
+                font-family: "Cascadia Mono";
+                font-size: 12px;
+                font-weight: 500;
+                color: Theme.text;
+                vertical-alignment: center;
+            }
+            Text {
+                text: root.slug;
+                font-family: "Cascadia Mono";
+                font-size: 10.5px;
+                color: Theme.text-dim;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            Text {
+                text: root.category;
+                font-family: "Arial";
+                font-size: 10.5px;
+                color: Theme.text-faint;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+        IconBtn {
+            size: 30px;
+            commands: "M 6 6 L 18 18 M 18 6 L 6 18";
+            danger: true;
+            clicked => { root.remove(); }
+        }
+    }
+}

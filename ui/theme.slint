@@ -1,0 +1,80 @@
+// 3D Asset Browser — dark, frameless, frosted-glass design system.
+// Layout is fully rewritten: every panel stretches, nothing depends on a fixed
+// window width. Palette follows the bilibili-slint dark tokens so the Acrylic
+// backdrop (main.rs) reads through the translucent window background.
+
+// ---------------------------------------------------------------------------
+// Tokens
+// ---------------------------------------------------------------------------
+export global Theme {
+    // Window surface is translucent: the DWM Acrylic backdrop shows through it.
+    out property <color> window-bg: #121212A6;
+    out property <color> surface: #1E1E1E;
+    out property <color> surface-2: #242424;
+    out property <color> hover: #2A2A2A;
+    out property <color> well: #242424;
+    out property <color> divider: #2E2E2E;
+    out property <color> border: #3A3A3A;
+    out property <color> border-strong: #4A4A4A;
+    out property <color> text: #E8E8E8;
+    out property <color> text-dim: #9A9A9A;
+    out property <color> text-faint: #7A7A7A;
+    out property <color> accent: #3EA6FF;
+    out property <color> accent-fg: #0B0B0B;
+    out property <color> ok: #4ADE80;
+    out property <color> warn: #E8A45C;
+    out property <color> danger: #FF6B6B;
+    out property <color> overlay: #000000A8;
+    out property <color> blender: #E87D0D;
+    out property <color> unity: #C8C8C8;
+    out property <color> painter: #FF5A5A;
+}
+
+// ---------------------------------------------------------------------------
+// Contract structs (names/fields are frozen — main.rs binds to them)
+// ---------------------------------------------------------------------------
+export struct AssetItem {
+    code: string,
+    slug: string,
+    thumb: image,
+    tag1: string,
+    tag2: string,
+    tag3: string,
+    in-cart: bool,
+    kind: int,
+}
+
+export struct GridRow {
+    a: int,
+    b: int,
+    c: int,
+    d: int,
+    e: int,
+    f: int,
+    n: int,
+}
+
+export struct CartRow {
+    code: string,
+    slug: string,
+    category: string,
+    idx: int,
+    thumb: image,
+}
+
+export struct SpecRow {
+    k: string,
+    v: string,
+}
+
+export struct SlideItem {
+    label: string,
+    rel: string,
+    thumb: image,
+    active: bool,
+}
+
+export struct ClipItem {
+    name: string,
+    dur: string,
+}

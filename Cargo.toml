@@ -1,0 +1,26 @@
+[package]
+name = "asset-library-desktop"
+version = "0.1.0"
+edition = "2021"
+build = "build.rs"
+description = "Native desktop browser for the local 3D asset library (Rust + Slint)"
+
+[dependencies]
+slint = { version = "1.18", features = ["raw-window-handle-06"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+arboard = "3"
+ureq = { version = "2", features = ["json"] }
+chrono = "0.4"
+gltf = "1.4"
+base64 = "0.22"
+raw-window-handle = "0.6"
+
+[build-dependencies]
+slint-build = "1.18"
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 2
