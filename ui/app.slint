@@ -202,6 +202,11 @@ export component AppWindow inherits Window {
     callback rig-zoom(float);
     callback win-minimize();
     callback win-close();
+    // Self-driven window move: app-driven `SetWindowPos`, never the OS modal
+    // move loop (which would re-evaluate the frame and restore the caption).
+    callback window-drag-start();
+    callback window-drag-move();
+    callback window-drag-end();
 
     // ---- shell -------------------------------------------------------------
     VerticalLayout {
@@ -213,7 +218,36 @@ export component AppWindow inherits Window {
             // transparent: the root window already paints Theme.window-bg, and
             // window-bg is translucent, so a second layer here would darken it.
             background: transparent;
-            WindowMoveArea { }
+            // App-driven drag region. Declared FIRST so the brand, tabs and
+            // buttons (declared later, hence on top) keep their own clicks;
+            // the empty header area falls through to this TouchArea and starts
+            // a self-driven move instead of an OS modal move loop.
+            drag-area := TouchArea {
+                x: 0;
+                y: 0;
+                width: parent.width;
+                height: parent.height;
+                pointer-event(event) => {
+                    // Mirror the reference: the button is only meaningful on the
+                    // press, so it is checked INSIDE the down branch. Checking it
+                    // for every kind silently filters out every move and release
+                    // (the button reported during a drag is not `left`), which
+                    // leaves the drag started but never moving.
+                    if (event.kind == PointerEventKind.down) {
+                        if (event.button != PointerEventButton.left) {
+                            return EventResult.reject;
+                        }
+                        root.window-drag-start();
+                        EventResult.accept
+                    } else if (event.kind == PointerEventKind.move) {
+                        root.window-drag-move();
+                        EventResult.accept
+                    } else {
+                        root.window-drag-end();
+                        EventResult.accept
+                    }
+                }
+            }
             Rectangle { y: parent.height - 1px; height: 1px; width: parent.width; background: Theme.divider; }
             HorizontalLayout {
                 width: parent.width;
@@ -230,7 +264,6 @@ export component AppWindow inherits Window {
                     // No explicit height: inside this padded HorizontalLayout an
                     // explicit height sticks the box to the content top, so the
                     // glyphs centre 14px too low. Let the layout cross-stretch it.
-                    WindowMoveArea { }
                     Text {
                         text: "ASSET BROWSER";
                         font-family: "Haettenschweiler";
@@ -244,7 +277,7 @@ export component AppWindow inherits Window {
                     }
                 }
 
-                WindowMoveArea { horizontal-stretch: 1; }
+                Rectangle { horizontal-stretch: 1; }
 
                 HorizontalLayout {
                     spacing: 8px;
@@ -254,7 +287,7 @@ export component AppWindow inherits Window {
                     Tab { label: "Rigs"; width: 150px; active: root.tab == 2; clicked => { root.select-tab(2); } }
                 }
 
-                WindowMoveArea { horizontal-stretch: 1; }
+                Rectangle { horizontal-stretch: 1; }
 
                 StatusIconBtn {
                     commands: "M 13.3 5.9 A 6.1 6.1 0 1 1 13.29 18.1 A 6.1 6.1 0 1 1 13.3 5.9 M 10.4 12 L 16 12 L 13.2 15.9 Z M 7.2 13.9 L 4.5 12 L 7.2 10.1";

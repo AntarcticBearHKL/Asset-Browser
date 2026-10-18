@@ -23,7 +23,7 @@ mod tests;
 
 slint::include_modules!();
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
@@ -1079,6 +1079,208 @@ fn glass_log(msg: &str) {
 #[cfg(not(windows))]
 fn glass_log(_msg: &str) {}
 
+/* ----------------------- window drag (self-driven) ---------------------- */
+
+/// Native `HWND` of a Slint window, or `None` on a non-Win32/unsupported
+/// backend.
+///
+/// Shared by the frosted-glass setup and the self-driven window drag, so the
+/// handle is resolved through Slint's `raw-window-handle` integration in one
+/// place (never by window title, which would be ambiguous).
+fn hwnd_of(window: &slint::Window) -> Option<isize> {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    let handle = window.window_handle();
+    let raw = HasWindowHandle::window_handle(&handle).ok()?;
+    match raw.as_raw() {
+        RawWindowHandle::Win32(win32) => Some(win32.hwnd.get()),
+        _ => None,
+    }
+}
+
+/// Absolute window top-left for a cursor position, relative to a drag anchor.
+///
+/// Pure on purpose: this is the math the regression tests pin. The window
+/// follows the cursor delta exactly once, independent of how many move events
+/// have already been delivered, so repeating a move for the same cursor is a
+/// no-op and the window can never accumulate motion.
+fn drag_target(
+    anchor_window: (i32, i32),
+    anchor_cursor: (i32, i32),
+    cursor: (i32, i32),
+) -> (i32, i32) {
+    (
+        anchor_window.0 + (cursor.0 - anchor_cursor.0),
+        anchor_window.1 + (cursor.1 - anchor_cursor.1),
+    )
+}
+
+/// Self-driven window move state for the main Slint window.
+///
+/// Deliberately never hands the drag to the OS (no OS modal move loop, which
+/// would re-evaluate the frame and restore the caption). The press records an
+/// absolute anchor: the physical screen cursor and the window's physical outer
+/// top-left. Every move then computes one absolute target from that anchor and
+/// applies it with `SetWindowPos`, so repeating a move for the same cursor is a
+/// no-op and the window can never accumulate motion.
+pub struct WindowDrag {
+    dragging: Cell<bool>,
+    anchor_cursor: Cell<(i32, i32)>,
+    anchor_window: Cell<(i32, i32)>,
+}
+
+impl WindowDrag {
+    pub fn new() -> Self {
+        Self {
+            dragging: Cell::new(false),
+            anchor_cursor: Cell::new((0, 0)),
+            anchor_window: Cell::new((0, 0)),
+        }
+    }
+
+    /// Record the absolute drag anchor. Never moves the window.
+    ///
+    /// Both the cursor and the native window rect must be readable; otherwise
+    /// the drag is left inactive so a stale/default anchor is never used.
+    pub fn start(&self, window: &slint::Window) {
+        let Some(hwnd) = hwnd_of(window) else {
+            self.dragging.set(false);
+            return;
+        };
+        let Some(cursor) = cursor_position() else {
+            self.dragging.set(false);
+            return;
+        };
+        let Some(origin) = window_origin_hwnd(hwnd) else {
+            self.dragging.set(false);
+            return;
+        };
+        self.anchor_cursor.set(cursor);
+        self.anchor_window.set(origin);
+        self.dragging.set(true);
+    }
+
+    /// Treat the current cursor position as an absolute drag position.
+    pub fn move_to(&self, window: &slint::Window) {
+        if !self.dragging.get() {
+            return;
+        }
+        let Some(cursor) = cursor_position() else {
+            return;
+        };
+        self.move_to_cursor(window, cursor);
+    }
+
+    /// Diagnostic entry point: identical absolute path with an explicit cursor.
+    ///
+    /// Reads no window position and sends no synthetic input, so a debug hook
+    /// exercises exactly the production math.
+    pub fn move_to_cursor(&self, window: &slint::Window, cursor: (i32, i32)) {
+        if !self.dragging.get() {
+            return;
+        }
+        let Some(hwnd) = hwnd_of(window) else {
+            return;
+        };
+        let target = drag_target(
+            self.anchor_window.get(),
+            self.anchor_cursor.get(),
+            cursor,
+        );
+        set_origin_hwnd(hwnd, target);
+    }
+
+    pub fn end(&self) {
+        self.dragging.set(false);
+    }
+
+    /// The captured `(cursor, window)` anchor, for diagnostics only.
+    #[allow(dead_code)]
+    pub fn anchor(&self) -> ((i32, i32), (i32, i32)) {
+        (self.anchor_cursor.get(), self.anchor_window.get())
+    }
+}
+
+#[cfg(windows)]
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct WinPoint {
+    x: i32,
+    y: i32,
+}
+
+#[cfg(windows)]
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct WinRect {
+    left: i32,
+    top: i32,
+    right: i32,
+    bottom: i32,
+}
+
+#[cfg(windows)]
+#[link(name = "user32")]
+extern "system" {
+    fn GetCursorPos(point: *mut WinPoint) -> i32;
+    fn GetWindowRect(hwnd: isize, rect: *mut WinRect) -> i32;
+    fn SetWindowPos(
+        hwnd: isize,
+        insert_after: isize,
+        x: i32,
+        y: i32,
+        cx: i32,
+        cy: i32,
+        flags: u32,
+    ) -> i32;
+}
+
+/// Physical screen cursor position, or `None` when `GetCursorPos` fails.
+#[cfg(windows)]
+fn cursor_position() -> Option<(i32, i32)> {
+    let mut point = WinPoint::default();
+    (unsafe { GetCursorPos(&mut point) } != 0).then_some((point.x, point.y))
+}
+
+#[cfg(not(windows))]
+fn cursor_position() -> Option<(i32, i32)> {
+    None
+}
+
+/// Physical top-left of a raw window rect, or `None` when the read fails.
+#[cfg(windows)]
+fn window_origin_hwnd(hwnd: isize) -> Option<(i32, i32)> {
+    let mut rect = WinRect::default();
+    (unsafe { GetWindowRect(hwnd, &mut rect) } != 0).then_some((rect.left, rect.top))
+}
+
+#[cfg(not(windows))]
+fn window_origin_hwnd(_hwnd: isize) -> Option<(i32, i32)> {
+    None
+}
+
+/// Move a window to an absolute physical top-left. Never relative, never
+/// resized, never re-activated, never re-ordered in the Z axis.
+#[cfg(windows)]
+fn set_origin_hwnd(hwnd: isize, (x, y): (i32, i32)) {
+    const SWP_NOSIZE: u32 = 0x0001;
+    const SWP_NOZORDER: u32 = 0x0004;
+    const SWP_NOACTIVATE: u32 = 0x0010;
+    unsafe {
+        SetWindowPos(
+            hwnd,
+            0,
+            x,
+            y,
+            0,
+            0,
+            SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+        );
+    }
+}
+
+#[cfg(not(windows))]
+fn set_origin_hwnd(_hwnd: isize, _target: (i32, i32)) {}
+
 /// Frosted-glass setup, ported from bilibili-slint's `win.rs`.
 ///
 /// `DwmExtendFrameIntoClientArea` is the step that actually makes a frameless
@@ -1087,12 +1289,10 @@ fn glass_log(_msg: &str) {}
 /// back to the undocumented Win10 accent policy. Everything is best-effort.
 #[cfg(windows)]
 fn apply_backdrop(ui: &AppWindow) -> bool {
-    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-
     const GWL_STYLE: i32 = -16;
     const WS_CAPTION: isize = 0x00C0_0000;
     const WS_THICKFRAME: isize = 0x0004_0000;
-    const SWP_FLAGS: u32 = 0x0001 | 0x0002 | 0x0004 | 0x0010 | 0x0020;
+
 
     const DWMWA_USE_IMMERSIVE_DARK_MODE: u32 = 20;
     const DWMWA_WINDOW_CORNER_PREFERENCE: u32 = 33;
@@ -1185,6 +1385,74 @@ fn apply_backdrop(ui: &AppWindow) -> bool {
     const DWMWA_BORDER_COLOR: u32 = 34;
     const DWMWA_COLOR_NONE: u32 = 0xFFFF_FFFE;
 
+    // Frameless window styles + the messages that keep it frameless. Ported from
+    // bilibili-slint's `win.rs`, which solves the same problem on this stack.
+    const GWL_EXSTYLE: i32 = -20;
+    const WS_DLGFRAME: isize = 0x0040_0000;
+    const WS_BORDER: isize = 0x0080_0000;
+    const WS_EX_WINDOWEDGE: isize = 0x0000_0100;
+    const WS_EX_CLIENTEDGE: isize = 0x0000_0200;
+    const WS_EX_STATICEDGE: isize = 0x0002_0000;
+    const WS_EX_DLGMODALFRAME: isize = 0x0000_0001;
+    const WM_STYLECHANGING: u32 = 0x007C;
+    const WM_STYLECHANGED: u32 = 0x007D;
+    const WM_NCACTIVATE: u32 = 0x0086;
+    const WM_NCPAINT: u32 = 0x0085;
+    const WM_NCUAHDRAWCAPTION: u32 = 0x00AE;
+    const WM_NCUAHDRAWFRAME: u32 = 0x00AF;
+    const SWP_FRAMECHANGED: u32 = 0x0020;
+    const SWP_NOMOVE: u32 = 0x0002;
+    const SWP_NOZORDER: u32 = 0x0004;
+    const SWP_NOACTIVATE: u32 = 0x0010;
+
+    /// `STYLESTRUCT` — the payload of `WM_STYLECHANGING` / `-CHANGED`.
+    #[repr(C)]
+    struct StyleStruct {
+        style_old: u32,
+        style_new: u32,
+    }
+
+    /// Re-assert the frameless style words.
+    ///
+    /// `WS_CAPTION`/`WS_DLGFRAME`/`WS_BORDER` are cleared and `WS_THICKFRAME` is
+    /// kept (re-added if something dropped it) because the DWM shadow and snap
+    /// ride on it. On the extended side the four non-client edge styles are
+    /// cleared; `WS_EX_WINDOWEDGE` is deliberately excluded from the change test
+    /// because USER32 re-adds it to every top-level window by itself, and
+    /// treating that as a change would make this non-idempotent.
+    ///
+    /// Idempotent and cheap: when the words already have the wanted value this
+    /// issues no `SetWindowLongPtrW`/`SetWindowPos` at all, so the glass retry
+    /// chain can call it unconditionally as a watchdog.
+    unsafe fn normalise_frameless(hwnd: isize) {
+        let style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+        let want_style = (style & !(WS_CAPTION | WS_DLGFRAME | WS_BORDER)) | WS_THICKFRAME;
+        let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        let want_ex = ex_style
+            & !(WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE | WS_EX_STATICEDGE | WS_EX_DLGMODALFRAME);
+        let ex_needs_change =
+            ex_style & (WS_EX_CLIENTEDGE | WS_EX_STATICEDGE | WS_EX_DLGMODALFRAME) != 0;
+        if want_style == style && !ex_needs_change {
+            return;
+        }
+        if want_style != style {
+            SetWindowLongPtrW(hwnd, GWL_STYLE, want_style);
+        }
+        if want_ex != ex_style {
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, want_ex);
+        }
+        SetWindowPos(
+            hwnd,
+            0,
+            0,
+            0,
+            0,
+            0,
+            SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+        );
+    }
+
+
     static OLD_WNDPROC: std::sync::atomic::AtomicIsize =
         std::sync::atomic::AtomicIsize::new(0);
 
@@ -1203,8 +1471,54 @@ fn apply_backdrop(ui: &AppWindow) -> bool {
         wparam: usize,
         lparam: isize,
     ) -> isize {
-        if msg == WM_NCCALCSIZE && wparam != 0 {
+        // Client area == whole window for BOTH the "proposed parameters" form
+        // (wparam != 0) and the plain window-rect form (wparam == 0). Falling
+        // through to the default proc here is what computes a standard caption +
+        // border frame — that is where the native title bar comes from.
+        if msg == WM_NCCALCSIZE {
             return 0;
+        }
+
+        // Claim every activation as handled without calling the default proc: it
+        // repaints the caption/frame on activate AND deactivate, so the native
+        // title bar flashes in whenever another window takes focus.
+        if msg == WM_NCACTIVATE {
+            normalise_frameless(hwnd);
+            return 1;
+        }
+
+        // There is no non-client area to paint (see WM_NCCALCSIZE). The two
+        // undocumented theme messages draw a fake caption/frame over the client.
+        if msg == WM_NCPAINT || msg == WM_NCUAHDRAWCAPTION || msg == WM_NCUAHDRAWFRAME {
+            return 0;
+        }
+
+        // Filter the frame bits out of any incoming style change: winit re-applies
+        // WS_CAPTION after show(), and a stale instance could too. Do NOT return —
+        // the filtered change still has to be applied by the default proc below.
+        if msg == WM_STYLECHANGING && lparam != 0 {
+            let change = lparam as *mut StyleStruct;
+            if wparam as i32 == GWL_STYLE {
+                (*change).style_new &= !((WS_CAPTION | WS_DLGFRAME | WS_BORDER) as u32);
+            } else if wparam as i32 == GWL_EXSTYLE {
+                (*change).style_new &= !((WS_EX_WINDOWEDGE
+                    | WS_EX_CLIENTEDGE
+                    | WS_EX_STATICEDGE
+                    | WS_EX_DLGMODALFRAME) as u32);
+            }
+        }
+
+        // Re-assert after the change landed, in case it bypassed the filter above.
+        if msg == WM_STYLECHANGED {
+            let result = CallWindowProcW(
+                OLD_WNDPROC.load(std::sync::atomic::Ordering::Relaxed),
+                hwnd,
+                msg,
+                wparam,
+                lparam,
+            );
+            normalise_frameless(hwnd);
+            return result;
         }
 
         if msg == WM_NCHITTEST {
@@ -1321,16 +1635,10 @@ fn apply_backdrop(ui: &AppWindow) -> bool {
         fn GetProcAddress(module: isize, name: *const u8) -> *const std::os::raw::c_void;
     }
 
-    let handle = ui.window().window_handle();
-    glass_log("glass: got slint window_handle");
-    let Ok(raw) = HasWindowHandle::window_handle(&handle) else {
+    let Some(hwnd) = hwnd_of(ui.window()) else {
+        glass_log("glass: FAILED no Win32 handle");
         return false;
     };
-    let RawWindowHandle::Win32(win32) = raw.as_raw() else {
-        glass_log("glass: FAILED not a Win32 handle");
-        return false;
-    };
-    let hwnd = win32.hwnd.get();
     glass_log(&format!("glass: hwnd={hwnd}"));
     if hwnd == 0 {
         return false;
@@ -1377,13 +1685,8 @@ fn apply_backdrop(ui: &AppWindow) -> bool {
         let _ = set_u32(DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND);
         let _ = set_u32(DWMWA_USE_IMMERSIVE_DARK_MODE, 1);
 
-        // 4. enforce frameless while keeping native resize, then kill the frame
-        let style = GetWindowLongPtrW(hwnd, GWL_STYLE);
-        let frameless = (style & !WS_CAPTION) | WS_THICKFRAME;
-        if frameless != style {
-            SetWindowLongPtrW(hwnd, GWL_STYLE, frameless);
-            SetWindowPos(hwnd, 0, 0, 0, 0, 0, SWP_FLAGS);
-        }
+        // 4. enforce frameless while keeping native resize, then kill the DWM border
+        normalise_frameless(hwnd);
         let _ = set_u32(DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE);
         if OLD_WNDPROC.load(std::sync::atomic::Ordering::Relaxed) == 0 {
             let proc = frameless_proc
@@ -1396,7 +1699,6 @@ fn apply_backdrop(ui: &AppWindow) -> bool {
 
         // 5. never keep an always-on-top bit (a leftover from an external tool
         //    would pin the window above every other app)
-        const GWL_EXSTYLE: i32 = -20;
         const WS_EX_TOPMOST: isize = 0x0000_0008;
         const HWND_NOTOPMOST: isize = -2;
         const SWP_PLAIN: u32 = 0x0001 | 0x0002 | 0x0010;
@@ -1525,7 +1827,10 @@ fn main() -> Result<(), slint::PlatformError> {
         ui.set_status_text(format!("Manifest not found: {MANIFEST}").into());
     }
 
-    wire_callbacks(&ui, &app_rc);
+    // Self-driven window drag state, shared with the callbacks (like the toast
+    // timer) so the press/move/release sequence sees one anchor.
+    let drag = Rc::new(WindowDrag::new());
+    wire_callbacks(&ui, &app_rc, &drag);
 
     // Initial health probe + 15s re-probe timer.
     probe_all(ui.as_weak());
@@ -1591,7 +1896,7 @@ fn main() -> Result<(), slint::PlatformError> {
 
 /* ------------------------------ callbacks ------------------------------- */
 
-fn wire_callbacks(ui: &AppWindow, app_rc: &Rc<RefCell<App>>) {
+fn wire_callbacks(ui: &AppWindow, app_rc: &Rc<RefCell<App>>, drag: &Rc<WindowDrag>) {
     // --- toolbar / filters ------------------------------------------------
     {
         let app_rc = app_rc.clone();
@@ -3132,6 +3437,31 @@ fn wire_callbacks(ui: &AppWindow, app_rc: &Rc<RefCell<App>>) {
             let _ = slint::quit_event_loop();
         });
     }
+
+    // --- self-driven window drag (never the OS modal move loop) -----------
+    {
+        let weak = ui.as_weak();
+        let drag = drag.clone();
+        ui.on_window_drag_start(move || {
+            if let Some(u) = weak.upgrade() {
+                drag.start(&u.window());
+            }
+        });
+    }
+    {
+        let weak = ui.as_weak();
+        let drag = drag.clone();
+        ui.on_window_drag_move(move || {
+            if let Some(u) = weak.upgrade() {
+                drag.move_to(&u.window());
+            }
+        });
+    }
+    {
+        let drag = drag.clone();
+        ui.on_window_drag_end(move || drag.end());
+    }
+
 
     // --- toast ------------------------------------------------------------
     {

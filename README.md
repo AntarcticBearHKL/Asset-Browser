@@ -48,12 +48,23 @@ themselves when `D:\3D Resource\_Catalog\manifest.json` is absent.
   frameless window has no backdrop at all), `DWMWA_SYSTEMBACKDROP_TYPE` = Desktop Acrylic,
   `DWMWA_USE_IMMERSIVE_DARK_MODE`, rounded corners, and a Win10
   `SetWindowCompositionAttribute`/`ACCENT_ENABLE_ACRYLICBLURBEHIND` fallback.
-- **Frameless but natively resizable.** `WS_CAPTION` is stripped and `WM_NCCALCSIZE` reports
-  a zero-size non-client area, which also removes the frame the default hit test needs — so
-  the window procedure answers `WM_NCHITTEST` itself with a 6px edge/corner band, and
-  `WM_GETMINMAXINFO` + `WM_WINDOWPOSCHANGING` enforce a 1368×620 minimum. The Slint window
-  deliberately does **not** pin `width`/`height` (a constant binding freezes the surface and
-  the layout stops following an OS resize); the initial 1440×900 is set from Rust.
+- **Frameless, and it stays frameless.** `WM_NCCALCSIZE` reports a zero-size non-client area
+  for **both** of its forms; `WM_NCACTIVATE` / `WM_NCPAINT` / `WM_NCUAHDRAWCAPTION` /
+  `WM_NCUAHDRAWFRAME` are answered so nothing repaints a caption; and `WM_STYLECHANGING`
+  filters the frame bits out of every incoming style change — necessary because winit
+  re-applies `WS_CAPTION` after `show()`, so one-shot stripping is not enough.
+  `WS_THICKFRAME` is kept: the DWM shadow and snap ride on it.
+- **Dragging is app-driven, not the OS move loop.** `WindowMoveArea` is deliberately gone.
+  The header carries a `TouchArea` whose `pointer-event` drives `window-drag-start/move/end`,
+  and the Rust side records an absolute anchor (screen cursor + window origin) on press and
+  applies one absolute `SetWindowPos` per move. The OS modal move loop is what re-evaluates
+  the frame and makes a native border appear while dragging. Because the anchor is absolute,
+  repeating a move for the same cursor is a no-op and the window cannot accumulate drift.
+- **Resizing stays native.** `WM_NCHITTEST` answers a 6px edge/corner band, which is what
+  keeps the native resize rim and Aero Snap; `WM_GETMINMAXINFO` + `WM_WINDOWPOSCHANGING`
+  enforce a 1368×620 minimum. The Slint window deliberately does **not** pin `width`/`height`
+  (a constant binding freezes the surface and the layout stops following an OS resize); the
+  initial 1440×900 is set from Rust.
 - **Bridges run in-process.** The Python relays existed only because a browser cannot open
   raw sockets; this binary talks to the targets directly — the Blender MCP addon over its TCP
   socket (`127.0.0.1:9876`, NUL-terminated JSON), Unity's MCP REST API
@@ -149,4 +160,7 @@ the screen, so the result matches what a user actually sees (including the acryl
   is no "from" value to animate, and the element is destroyed before an exit animation could
   run. Animating them would mean keeping every overlay alive behind `opacity`, which risks an
   invisible overlay swallowing clicks.
+- **Dragging the window to a screen edge no longer Aero-Snaps it.** That gesture is performed
+  by the OS move loop, which this app deliberately no longer enters (it is what drew the
+  native border during a drag). `Win`+arrow keys still work — the shell handles those.
 - No licence file is included yet.

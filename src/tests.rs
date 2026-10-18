@@ -761,3 +761,30 @@ fn real_library_filters_and_reads_files() {
     assert!(lib.read_text("_Catalog/taxonomy.json").is_ok());
     assert!(lib.read_text("_Catalog/nope-missing.json").is_err());
 }
+
+#[test]
+fn drag_target_shifts_both_axes_by_the_cursor_delta() {
+    assert_eq!(
+        crate::drag_target((100, 100), (500, 400), (620, 480)),
+        (220, 180)
+    );
+}
+
+#[test]
+fn drag_target_is_idempotent_for_the_same_cursor() {
+    let anchor_window = (100, 100);
+    let anchor_cursor = (500, 400);
+    let cursor = (620, 480);
+    let first = crate::drag_target(anchor_window, anchor_cursor, cursor);
+    for _ in 0..5 {
+        assert_eq!(crate::drag_target(anchor_window, anchor_cursor, cursor), first);
+    }
+}
+
+#[test]
+fn drag_target_zero_delta_is_a_no_op() {
+    assert_eq!(
+        crate::drag_target((100, 100), (500, 400), (500, 400)),
+        (100, 100)
+    );
+}
