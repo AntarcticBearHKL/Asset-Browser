@@ -1,11 +1,11 @@
 # Asset Browser — native desktop
 
 A native Windows desktop browser for a **local 3D asset library**, built with
-**Rust + Slint 1.18**. It is a re-implementation of the companion web app
-(`D:\Dev\asset-browser`, Vite + vanilla JS) as a single self-contained binary: no
-browser, no dev server, no Python relay processes.
+**Rust + Slint 1.18**. It replaces the earlier companion web app (Vite + vanilla JS)
+with a single self-contained binary: no browser, no dev server, no Python relay
+processes.
 
-**Version 0.01** · repo: <https://github.com/AntarcticBearHKL/Asset-Browser>
+**Version 0.02** · repo: <https://github.com/AntarcticBearHKL/Asset-Browser>
 
 ## What it does
 
@@ -19,7 +19,7 @@ selected assets off to DCC tools.
 
 ## Install (pre-built)
 
-1. Download `AssetBrowser-v0.01-win64.zip` from the
+1. Download `AssetBrowser-v0.02-win64.zip` from the
    [Releases](https://github.com/AntarcticBearHKL/Asset-Browser/releases) page.
 2. Extract anywhere and run `asset-library-desktop.exe`.
 3. Needs a 64-bit Windows 10/11 and the Microsoft Visual C++ 2015-2022 Redistributable
@@ -36,18 +36,40 @@ cargo run              # debug
 cargo build --release  # -> target\release\asset-library-desktop.exe
 ```
 
-`cargo test` runs 35 tests (plus 2 ignored); the ones that touch the real library skip
+`cargo test` runs 65 tests (plus 6 ignored); the ones that touch the real library skip
 themselves when `D:\3D Resource\_Catalog\manifest.json` is absent.
 
 ## Design
 
-- **Dark theme.** Palette tokens follow the bilibili-slint dark set
-  (`bg #121212`, `surface #1E1E1E`, `text #E8E8E8`, `accent #3EA6FF`).
-- **Frameless + frosted glass.** `no-frame` plus the full DWM treatment ported from
-  bilibili-slint's `win.rs`: `DwmExtendFrameIntoClientArea(-1)` (required — without it a
-  frameless window has no backdrop at all), `DWMWA_SYSTEMBACKDROP_TYPE` = Desktop Acrylic,
-  `DWMWA_USE_IMMERSIVE_DARK_MODE`, rounded corners, and a Win10
-  `SetWindowCompositionAttribute`/`ACCENT_ENABLE_ACRYLICBLURBEHIND` fallback.
+- **Dark and light theme.** Tokens follow the bilibili-slint dark set
+  (`bg #121212`, `surface #1E1E1E`, `text #E8E8E8`, `accent #3EA6FF`) in dark mode and a
+  matched light palette otherwise; the brand in the header opens a **Settings sheet** with
+  the theme switch, a transparency slider, and a Gaussian-blur slider (all persisted to
+  `store.json`; the tint strength is remembered per theme, both defaulting to 20% with
+  blur 100).
+- **Frameless + frosted glass, blurred in-process.** `no-frame` plus the frameless
+  treatment ported from bilibili-slint's `win.rs` (`WM_NCCALCSIZE`, `WM_NCACTIVATE`, the
+  `WM_NCUAHDRAW*` suppressions, and a `WM_STYLECHANGING` filter because winit re-applies
+  `WS_CAPTION` after `show()`). The glass is the algorithm of the sibling `studyapp`
+  project (`glass/blur.rs`), ported as-is: `glass.rs` photographs the whole desktop —
+  every monitor in one image — once with GDI (`WDA_EXCLUDEFROMCAPTURE` around the blit
+  so the grab contains what is *behind* the window, not the window itself), downscales
+  the shot by repeated 2×2 box halvings and runs a real separable Gaussian over the
+  result, and hands the image to Slint, which draws it under a tint layer. Because the
+  shot is the **whole desktop**, it is pinned to the desktop by placing it at
+  capture-origin minus window-origin: moving or resizing the window only re-registers
+  that placement. Capture + blur run on a worker thread (tens of milliseconds) and are
+  **never started while the window is moving** — that was the drag lag — instead the
+  shot is refreshed once the window has been still for 500 ms, at that cadence
+  afterwards, so the frost keeps up with whatever moved behind the window; the blur
+  slider re-blurs the stored pixels instead of re-capturing. The **Backdrop → Resample**
+  button in Settings forces a capture at once, and a monitor hot-plug / resolution
+  change (`WM_DISPLAYCHANGE`) takes one automatically.
+  Why not the OS: measured on this machine, `DwmEnableBlurBehindWindow` gives transparency
+  only (no blur), and the DWM backdrop paths composite opaquely and/or paint a caption
+  band across the client. The transparency and blur sliders scale the tint alpha and the
+  blur strength; at blur 0 the snapshot is skipped and the window falls back to the
+  compositor's own see-through (sharp, always live).
 - **Frameless, and it stays frameless.** `WM_NCCALCSIZE` reports a zero-size non-client area
   for **both** of its forms; `WM_NCACTIVATE` / `WM_NCPAINT` / `WM_NCUAHDRAWCAPTION` /
   `WM_NCUAHDRAWFRAME` are answered so nothing repaints a caption; and `WM_STYLECHANGING`
@@ -96,8 +118,17 @@ themselves when `D:\3D Resource\_Catalog\manifest.json` is absent.
   editable category and tags with save, per-asset refresh (re-reads `<slug>.json`), delete
   with click-again confirmation, and the bridge hand-off buttons.
 - **Rig 3D preview** — rigs play their `.glb` animation inside the detail panel. Rendering is
-  CPU-only: linear-blend skinning plus a software triangle rasterizer into a Slint image
-  (no GPU dependency) with orbit-by-drag, play/pause, restart, seek and a clip list.
+  CPU-only: linear-blend skinning (`src/rig/`) plus a threaded, 2x super-sampled software
+  rasterizer (`src/raster.rs`) into a Slint image — no GPU dependency. The panel opens on
+  the asset's own **first animated clip** (`Idle` when there is one), and the clip list
+  follows the catalog's `<stem>.clips.json` order (with the `<slug>__` prefix stripped);
+  playback runs on a wall-clock timeline with the spec's step / linear / cubic-spline
+  samplers, and the camera follows the *deformed* model so root-motion clips stay in frame.
+  A GLB that carries a skin **plus unskinned copies of the same body** (exported pose
+  line-ups) loads as the single animated character: the frozen copies would read as "the
+  animation is not applied". The stage draws a floor grid with a soft contact shadow.
+  Controls: **right-drag orbits**, **middle-drag pans**, the **wheel zooms**, plus
+  play/pause, restart, seek, reset view and **Bones** (a skeleton overlay over the mesh).
 - **Cart** — add / remove / clear / "add all filtered", persisted to
   `%APPDATA%\asset-library-desktop\store.json` and restored on launch, plus **Export codes**
   (writes the JSON payload to the clipboard, then clears the cart).
@@ -114,8 +145,9 @@ src/library.rs   filesystem: load manifest, read, edit, delete
 src/store.rs     persistence of cart + bridge config
 src/export.rs    cart export payloads (web-compatible)
 src/bridge.rs    in-process Blender / Unity / Painter clients + health probes
-src/rig.rs       GLB loading, skeleton evaluation, CPU linear-blend skinning
-src/raster.rs    software triangle rasterizer (z-buffer + Lambert clay shading)
+src/glass.rs     in-process backdrop: GDI screen grab + separable Gaussian (studyapp port)
+src/rig/         GLB loading, node graph + clips, CPU linear-blend skinning
+src/raster.rs    threaded software rasterizer (SSAA, floor grid, bone overlay)
 src/tests.rs     data-layer + rig/renderer tests
 ui/theme.slint       design tokens (Theme) + the Slint/Rust contract structs
 ui/components.slint  every reusable component (Card, Btn, Pick, dialogs, …)
@@ -139,19 +171,21 @@ powershell -ExecutionPolicy Bypass -File tools/screenshot.ps1 -View rig  -Out ri
 ```
 
 `-View` drives the `ALD_DEBUG_VIEW` startup hook in `main.rs`
-(`grid`, `cart`, `rig`, `model`, `cat`, `blender`, `unity`, `painter`). It finds the window by
-enumerating visible top-level windows for the process, forces it to the foreground, and grabs
-the screen, so the result matches what a user actually sees (including the acrylic backdrop).
+(`grid`, `cart`, `rig`, `rigbones`, `model`, `cat`, `blender`, `unity`, `painter`, `settings`). It finds
+the window by enumerating visible top-level windows for the process, forces it to the
+foreground, and grabs the screen, so the result matches what a user actually sees
+(including the blurred backdrop).
 
 ## Known limitations
 
 - **The rig preview renders on the CPU.** That keeps the app dependency-light and avoids
-  forcing a GPU backend. Measured on the reference library: 7 of the 10 `.glb` rigs are
-  11k–59k triangles and render in **3–10 ms/frame** at 512×448; the other 3
-  (`rig_insane_aircombo`, `rig_massive_greatsword`, `rig_oriental_spear`) are 77–93 MB
-  meshes with **1.0–1.6 M triangles** and take ~200–242 ms/frame, so their playback is
-  choppy (~4 fps). The UI stays responsive regardless — frames render on a worker thread
-  with one frame in flight, and the panel is interactive as soon as the first frame lands.
+  forcing a GPU backend. Measured on the reference library at 256×224 (2x super-sampled
+  internally, frame time includes skinning, floor and shadow, **debug build**: a loaded
+  dev machine can skew these): the seven 11k–59k triangle rigs land in **10–50 ms/frame**;
+  the three 1.0–1.6 M triangle meshes (`rig_insane_aircombo`, `rig_massive_greatsword`,
+  `rig_oriental_spear`) take **~0.4–0.6 s/frame**, so their playback is choppy there —
+  as before, the frames render on a worker thread with one frame in flight, so the UI
+  stays responsive regardless, and the release build is several times faster.
 - Thumbnails are decoded lazily, one per card on first reveal; nothing is decoded up front.
 - The library root is fixed at `D:\3D Resource` (the desktop equivalent of picking a
   directory in the browser); it is not yet user-configurable from the UI.

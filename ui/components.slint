@@ -308,6 +308,75 @@ export component TagChip inherits Rectangle {
     }
 }
 
+// 0..100 slider for the Settings sheet. std-widgets' Slider draws in the active
+// widget style (a fixed palette that ignores these tokens and looks wrong in
+// either theme); this one is drawn entirely from Theme.
+export component GlassSlider inherits Rectangle {
+    in-out property <float> value: 50;
+    callback slid(float);
+
+    height: 24px;
+    // The knob travels the track's width minus its own size; fill and knob both
+    // derive from this single position so they can never disagree.
+    property <length> knob-x: (clamp(root.value, 0, 100) / 100) * max(0px, root.width - 14px);
+
+    Rectangle {
+        x: 0;
+        y: (parent.height - self.height) / 2;
+        width: parent.width;
+        height: 6px;
+        border-radius: 3px;
+        background: Theme.surface-2;
+        border-width: 1px;
+        border-color: Theme.border;
+        clip: true;
+        // The fill grows from the LEFT edge. `x: 0` is load-bearing: Slint's
+        // default_geometry centres a child that sets its own width without an
+        // `x` (`maybe_center_in_parent`), which drew the filled part of the
+        // track in the middle instead of left-to-right.
+        Rectangle {
+            x: 0;
+            y: 0;
+            width: root.knob-x + 7px;
+            height: parent.height;
+            background: Theme.accent;
+            animate width { duration: 80ms; easing: ease-out; }
+        }
+    }
+    Rectangle {
+        x: root.knob-x;
+        y: (parent.height - self.height) / 2;
+        width: 14px;
+        height: 14px;
+        border-radius: 7px;
+        background: Theme.text;
+        border-width: 1px;
+        border-color: Theme.border-strong;
+    }
+    drag := TouchArea {
+        mouse-cursor: pointer;
+        // The pointer position comes from TouchArea's own `mouse-x` (a
+        // PointerEvent carries no coordinates), so it maps straight from the
+        // pointer position to the value.
+        function pick-from(px: length) {
+            root.value = clamp(100 * px / max(1px, self.width), 0, 100);
+            root.slid(root.value);
+        }
+        pointer-event(event) => {
+            if (event.kind == PointerEventKind.down) {
+                if (event.button != PointerEventButton.left) { return EventResult.reject; }
+                self.pick-from(self.mouse-x);
+                return EventResult.accept;
+            }
+            if ((event.kind == PointerEventKind.move || event.kind == PointerEventKind.up) && self.pressed) {
+                self.pick-from(self.mouse-x);
+                return EventResult.accept;
+            }
+            EventResult.reject
+        }
+    }
+}
+
 // Shared dialog chrome: eyebrow + display title + close (X).
 export component DialogHead inherits Rectangle {
     in property <string> eyebrow: "";

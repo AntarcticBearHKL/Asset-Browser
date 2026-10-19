@@ -17,6 +17,7 @@ mod export;
 mod bridge;
 mod rig;
 mod raster;
+mod glass;
 
 #[cfg(test)]
 mod tests;
@@ -26,7 +27,7 @@ slint::include_modules!();
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use slint::{ComponentHandle, Model, ModelRc, Timer, TimerMode, VecModel, Weak};
 
@@ -54,20 +55,35 @@ struct EditState {
     busy: bool,
 }
 
-/// Fixed size of the software-rendered rig frame (see `RIG_VIEWER_PLAN.md`).
-const RIG_W: u32 = 512;
-const RIG_H: u32 = 448;
+/// Internal resolution of the software-rendered rig frame. 2x super-sampled
+/// internally (see `raster::render`), so this is the smallest of the three
+/// numbers that matter.
+const RIG_W: u32 = 760;
+const RIG_H: u32 = 560;
 
 /// Live rig state while the 3D stage is on screen.
 struct RigSession {
     rig: Arc<rig::Rig>,
     camera: raster::Camera,
+    /// User zoom multiplier over the auto-fitted distance.
+    zoom: f32,
+    /// User pan, in world space, added to the auto-fitted camera target.
+    pan: [f32; 3],
+    /// Bind-pose bounds: initial framing, reset, and the ground plane.
     aabb_min: [f32; 3],
     aabb_max: [f32; 3],
+    /// Bounds of the last rendered pose, for the camera follow.
+    last_bounds: Option<([f32; 3], [f32; 3])>,
+    /// Monotonic playback clock.
+    last_step: Instant,
     clip: usize,
     time: f32,
     duration: f32,
+    /// Showing the skeleton's bind pose (the sidebar's `Preview` row) instead
+    /// of one of its animations.
+    base_pose: bool,
     playing: bool,
+    bones: bool,
     dirty: bool,
     pending: bool,
     w: u32,
@@ -91,6 +107,35 @@ struct App {
     delete_timer: Timer,
     probe_timer: Timer,
     rig_timer: Timer,
+    /// The capture the frosted backdrop was blurred from (whole desktop).
+    glass_shot: Option<glass::Shot>,
+    /// Set by the settings sheet's resample (and by a display change): take one
+    /// more capture even when the window has not been idle long enough yet.
+    glass_recapture: bool,
+    /// The blur setting the current image was built with, so moving the slider
+    /// re-blurs the stored shot instead of photographing the screen.
+    glass_blur_at_render: Option<u8>,
+    /// Where the image was last placed (logical px); a tick with no window
+    /// move never touches the placement properties.
+    glass_placed: Option<(f32, f32, f32, f32)>,
+    /// A capture/blur job is running on a worker thread; never more than one.
+    glass_pending: bool,
+    /// When the window last moved: the backdrop only re-captures once it has
+    /// been still for `GLASS_IDLE_REFRESH`.
+    glass_still_since: std::time::Instant,
+    /// When the last capture started, so the idle refresh runs at most once
+    /// per `GLASS_IDLE_REFRESH`.
+    glass_last_grab: std::time::Instant,
+    /// Window origin at the previous tick, to detect movement.
+    glass_last_origin: Option<(i32, i32)>,
+    glass_timer: Timer,
+    /// Set when the settings change; the store is written once a slider drag
+    /// has settled instead of once per pointer move.
+    store_pending_at: Option<std::time::Instant>,
+    /// Slint delivers a physical wheel notch as a burst of smooth-scroll
+    /// events; these gate fellow-travellers to one action per gesture.
+    page_wheel_ready: std::time::Instant,
+    rig_zoom_ready: std::time::Instant,
 }
 
 thread_local! {
@@ -629,25 +674,94 @@ fn stop_rig(ui: &AppWindow, a: &mut App) {
     a.rig_timer.stop();
     ui.set_rig_has_3d(false);
     ui.set_rig_playing(false);
+    ui.set_rig_base_pose(false);
     ui.set_detail_frame(slint::Image::default());
     ui.set_rig_seek_pos(0.0);
     ui.set_rig_duration(0.0);
+}
+
+/// A "nice" world-space grid spacing around `height / 5`, so the floor grid
+/// reads at any model scale (1.9 m character -> 0.5 m cells).
+fn grid_step(height: f32) -> f32 {
+    let raw = (height / 5.0).max(1e-3);
+    let base = 10f32.powf(raw.log10().floor());
+    let n = raw / base;
+    let nice = if n < 1.5 {
+        1.0
+    } else if n < 3.5 {
+        2.0
+    } else if n < 7.5 {
+        5.0
+    } else {
+        10.0
+    };
+    nice * base
+}
+
+impl RigSession {
+    /// Ground plane + grid + contact shadow for the current pose.
+    fn floor(&self) -> raster::Floor {
+        let height = (self.aabb_max[1] - self.aabb_min[1]).max(1e-3);
+        let (mn, mx) = self.last_bounds.unwrap_or((self.aabb_min, self.aabb_max));
+        let dx = (mx[0] - mn[0]).max(0.0);
+        let dz = (mx[2] - mn[2]).max(0.0);
+        let radius = (0.55 * (dx * dx + dz * dz).sqrt()).max(height * 0.18);
+        let lift = (mn[1] - self.aabb_min[1]).max(0.0);
+        raster::Floor {
+            y: self.aabb_min[1],
+            step: grid_step(height),
+            reach: (height * 7.0).max(1.5),
+            shadow: Some(raster::Shadow {
+                center: [(mn[0] + mx[0]) * 0.5, (mn[2] + mx[2]) * 0.5],
+                radius,
+                strength: 0.55 / (1.0 + lift * 3.0),
+            }),
+        }
+    }
 }
 
 fn spawn_rig_render(
     ui: Weak<AppWindow>,
     rig: Arc<rig::Rig>,
     cam: raster::Camera,
-    clip: usize,
+    clip: Option<usize>,
     time: f32,
     w: u32,
     h: u32,
+    floor: Option<raster::Floor>,
+    bones: bool,
 ) {
     std::thread::spawn(move || {
-        let joints = rig.joint_matrices(clip, time);
-        let (pos, nrm) = rig.skin(&joints);
+        // `None` = the bind pose (the sidebar's `Preview` entry).
+        let pose = match clip {
+            Some(c) => rig.pose(c, time),
+            None => rig.pose_bind(),
+        };
+        let bone_segments = if bones {
+            match clip {
+                Some(c) => rig.skeleton(c, time),
+                None => rig.skeleton_bind(),
+            }
+        } else {
+            Vec::new()
+        };
+        let overlay = raster::Overlay {
+            bones: &bone_segments,
+            ..Default::default()
+        };
         let mut buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(w, h);
-        raster::render(buffer.make_mut_bytes(), w, h, &pos, &nrm, &rig.indices, &cam);
+        raster::render(
+            buffer.make_mut_bytes(),
+            w,
+            h,
+            &pose.positions,
+            &pose.normals,
+            &rig.indices,
+            &cam,
+            floor,
+            &overlay,
+        );
+        let bounds = (pose.min, pose.max);
         let done = rig.clone();
         let _ = slint::invoke_from_event_loop(move || {
             let Some(u) = ui.upgrade() else {
@@ -658,6 +772,7 @@ fn spawn_rig_render(
                 if let Some(s) = a.rig.as_mut() {
                     if Arc::ptr_eq(&s.rig, &done) {
                         s.pending = false;
+                        s.last_bounds = Some(bounds);
                     }
                 }
             });
@@ -682,7 +797,8 @@ fn spawn_rig_load(ui: Weak<AppWindow>, idx: usize, path: String) {
                         let cam = raster::Camera::framed(mn, mx);
                         let rig = Arc::new(loaded);
                         let clips = rig.clips();
-                        let duration = clips.first().map(|c| c.1).unwrap_or(0.0);
+                        let clip = rig.default_clip();
+                        let duration = rig.clip_duration(clip);
                         let rows: Vec<ClipItem> = clips
                             .iter()
                             .map(|(name, dur)| ClipItem {
@@ -691,33 +807,54 @@ fn spawn_rig_load(ui: Weak<AppWindow>, idx: usize, path: String) {
                             })
                             .collect();
                         u.set_clips(ModelRc::new(VecModel::from(rows)));
-                        u.set_rig_clip_index(0);
+                        u.set_rig_clip_index(clip as i32);
                         u.set_rig_has_3d(true);
                         u.set_rig_playing(true);
                         u.set_rig_duration(duration);
                         u.set_rig_seek_pos(0.0);
                         u.set_rig_time(rig_time_text(0.0, duration).into());
-                        a.rig = Some(RigSession {
+                        let bones = u.get_rig_bones();
+                        let base_pose = rig.clip_count() == 0;
+                        let session = RigSession {
                             rig: rig.clone(),
                             camera: cam,
+                            zoom: 1.0,
+                            pan: [0.0; 3],
                             aabb_min: mn,
                             aabb_max: mx,
-                            clip: 0,
+                            last_bounds: None,
+                            last_step: Instant::now(),
+                            clip,
                             time: 0.0,
                             duration,
+                            base_pose,
                             playing: true,
+                            bones,
                             dirty: false,
                             pending: true,
                             w: RIG_W,
                             h: RIG_H,
-                        });
+                        };
+                        u.set_rig_base_pose(base_pose);
+                        let floor = Some(session.floor());
+                        a.rig = Some(session);
                         let weak = u.as_weak();
                         a.rig_timer.start(
                             TimerMode::Repeated,
                             Duration::from_millis(33),
                             move || rig_tick(weak.clone()),
                         );
-                        spawn_rig_render(u.as_weak(), rig, cam, 0, 0.0, RIG_W, RIG_H);
+                        spawn_rig_render(
+                            u.as_weak(),
+                            rig,
+                            cam,
+                            if base_pose { None } else { Some(clip) },
+                            0.0,
+                            RIG_W,
+                            RIG_H,
+                            floor,
+                            bones,
+                        );
                     }
                     Err(error) => {
                         a.rig = None;
@@ -732,6 +869,9 @@ fn spawn_rig_load(ui: Weak<AppWindow>, idx: usize, path: String) {
     });
 }
 
+/// One playback tick: advance the clock by the time that actually passed,
+/// ease the camera to frame the *deformed* model (so root-motion clips can
+/// never walk out of shot), then render one frame if anything moved.
 fn rig_tick(ui: Weak<AppWindow>) {
     let Some(u) = ui.upgrade() else {
         return;
@@ -740,13 +880,34 @@ fn rig_tick(ui: Weak<AppWindow>) {
         let Some(s) = a.rig.as_mut() else {
             return;
         };
-        if s.playing && s.duration > 0.0 {
-            s.time += 0.033;
-            while s.time >= s.duration {
-                s.time -= s.duration;
-            }
+        let now = Instant::now();
+        let dt = (now - s.last_step).as_secs_f32().clamp(0.0, 0.1);
+        s.last_step = now;
+
+        if s.playing && !s.base_pose && s.duration > 0.0 {
+            s.time = (s.time + dt).rem_euclid(s.duration);
             s.dirty = true;
         }
+
+        // Camera follow: frame the last pose's bounds, smoothly, plus the
+        // user's pan.
+        let aspect = s.w as f32 / s.h as f32;
+        if let Some((mn, mx)) = s.last_bounds {
+            let (target, fit) = raster::Camera::fit(mn, mx, s.camera.yaw, s.camera.pitch, aspect);
+            let want = fit * s.zoom;
+            let k = 1.0 - (-dt / 0.16).exp();
+            let mut moved = false;
+            for axis in 0..3 {
+                let d = (target[axis] + s.pan[axis]) - s.camera.target[axis];
+                moved |= d.abs() > 1e-5;
+                s.camera.target[axis] += d * k;
+            }
+            let dd = want - s.camera.dist;
+            moved |= dd.abs() > 1e-4;
+            s.camera.dist += dd * k;
+            s.dirty |= moved;
+        }
+
         if !s.dirty || s.pending {
             return;
         }
@@ -755,9 +916,26 @@ fn rig_tick(ui: Weak<AppWindow>) {
         let (cam, clip, time, w, h) = (s.camera, s.clip, s.time, s.w, s.h);
         let rig = s.rig.clone();
         let duration = s.duration;
-        u.set_rig_seek_pos(time);
-        u.set_rig_time(rig_time_text(time, duration).into());
-        spawn_rig_render(u.as_weak(), rig, cam, clip, time, w, h);
+        let floor = Some(s.floor());
+        let bones = s.bones;
+        let base_pose = s.base_pose;
+        if base_pose {
+            u.set_rig_time("bind pose".to_string().into());
+        } else {
+            u.set_rig_seek_pos(time);
+            u.set_rig_time(rig_time_text(time, duration).into());
+        }
+        spawn_rig_render(
+            u.as_weak(),
+            rig,
+            cam,
+            if base_pose { None } else { Some(clip) },
+            time,
+            w,
+            h,
+            floor,
+            bones,
+        );
     });
 }
 
@@ -1281,48 +1459,26 @@ fn set_origin_hwnd(hwnd: isize, (x, y): (i32, i32)) {
 #[cfg(not(windows))]
 fn set_origin_hwnd(_hwnd: isize, _target: (i32, i32)) {}
 
-/// Frosted-glass setup, ported from bilibili-slint's `win.rs`.
+/// Window chrome for the frameless window: rounded corners, dark DWM chrome, no
+/// border, and the frameless style/message handling that keeps it that way.
 ///
-/// `DwmExtendFrameIntoClientArea` is the step that actually makes a frameless
-/// window show a system backdrop; without it the DWM attributes below have no
-/// visible effect. Win11 22621+ gets a live Acrylic backdrop, older builds fall
-/// back to the undocumented Win10 accent policy. Everything is best-effort.
+/// Deliberately no system backdrop. The DWM acrylic would require
+/// `DwmExtendFrameIntoClientArea`, and extending the frame makes DWM paint its
+/// caption band across the top ~30px of the client — a hard horizontal edge that
+/// cannot be recoloured (`DWMWA_CAPTION_COLOR`) or disabled
+/// (`DWMWA_NCRENDERING_POLICY`); both are rejected with `E_HANDLE` on the build
+/// this was measured against. The window instead paints its own translucent
+/// background (`Theme.window-bg`) over the `glass.rs` in-process blur.
+/// Everything here is best-effort.
 #[cfg(windows)]
 fn apply_backdrop(ui: &AppWindow) -> bool {
     const GWL_STYLE: i32 = -16;
     const WS_CAPTION: isize = 0x00C0_0000;
     const WS_THICKFRAME: isize = 0x0004_0000;
 
-
     const DWMWA_USE_IMMERSIVE_DARK_MODE: u32 = 20;
     const DWMWA_WINDOW_CORNER_PREFERENCE: u32 = 33;
-    const DWMWA_SYSTEMBACKDROP_TYPE: u32 = 38;
     const DWMWCP_ROUND: u32 = 2;
-    const DWMSBT_TRANSIENTWINDOW: u32 = 3;
-
-    const WCA_ACCENT_POLICY: i32 = 19;
-    const ACCENT_ENABLE_ACRYLICBLURBEHIND: i32 = 4;
-
-    #[repr(C)]
-    struct Margins {
-        l: i32,
-        r: i32,
-        t: i32,
-        b: i32,
-    }
-    #[repr(C)]
-    struct AccentPolicy {
-        state: i32,
-        flags: i32,
-        gradient: u32,
-        animation: i32,
-    }
-    #[repr(C)]
-    struct WcaData {
-        attribute: i32,
-        data: *mut std::os::raw::c_void,
-        size: usize,
-    }
 
     #[repr(C)]
     #[derive(Clone, Copy, Default)]
@@ -1361,10 +1517,21 @@ fn apply_backdrop(ui: &AppWindow) -> bool {
         flags: u32,
     }
 
+    /// `DWM_BLURBEHIND`. With `DWM_BB_ENABLE` set and a null `region`, DWM blurs
+    /// the whole window rather than an (empty) region.
+    #[repr(C)]
+    struct BlurBehind {
+        flags: u32,
+        enable: i32,
+        region: isize,
+        transition_on_maximized: i32,
+    }
+    const DWM_BB_ENABLE: u32 = 0x0000_0001;
+
     #[link(name = "dwmapi")]
     extern "system" {
         fn DwmSetWindowAttribute(hwnd: isize, attr: u32, value: *const u8, size: u32) -> i32;
-        fn DwmExtendFrameIntoClientArea(hwnd: isize, margins: *const Margins) -> i32;
+        fn DwmEnableBlurBehindWindow(hwnd: isize, data: *const BlurBehind) -> i32;
     }
     #[link(name = "user32")]
     extern "system" {
@@ -1400,6 +1567,7 @@ fn apply_backdrop(ui: &AppWindow) -> bool {
     const WM_NCPAINT: u32 = 0x0085;
     const WM_NCUAHDRAWCAPTION: u32 = 0x00AE;
     const WM_NCUAHDRAWFRAME: u32 = 0x00AF;
+    const WM_DISPLAYCHANGE: u32 = 0x007E;
     const SWP_FRAMECHANGED: u32 = 0x0020;
     const SWP_NOMOVE: u32 = 0x0002;
     const SWP_NOZORDER: u32 = 0x0004;
@@ -1521,6 +1689,12 @@ fn apply_backdrop(ui: &AppWindow) -> bool {
             return result;
         }
 
+        // A monitor was added / removed / rearranged: the stored capture no
+        // longer describes the desktop, so ask for one more (see glass_step).
+        if msg == WM_DISPLAYCHANGE {
+            GLASS_DISPLAY_CHANGED.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+
         if msg == WM_NCHITTEST {
             const BAND: i32 = 6;
             const HTCLIENT: isize = 1;
@@ -1629,12 +1803,6 @@ fn apply_backdrop(ui: &AppWindow) -> bool {
             lparam,
         )
     }
-    #[link(name = "kernel32")]
-    extern "system" {
-        fn LoadLibraryW(name: *const u16) -> isize;
-        fn GetProcAddress(module: isize, name: *const u8) -> *const std::os::raw::c_void;
-    }
-
     let Some(hwnd) = hwnd_of(ui.window()) else {
         glass_log("glass: FAILED no Win32 handle");
         return false;
@@ -1649,45 +1817,34 @@ fn apply_backdrop(ui: &AppWindow) -> bool {
     };
 
     unsafe {
-        // 1. extend the DWM frame over the whole client area (mandatory for the
-        //    backdrop of a frameless window)
-        let margins = Margins { l: -1, r: -1, t: -1, b: -1 };
-        let _ = DwmExtendFrameIntoClientArea(hwnd, &margins);
-        let _ = DwmExtendFrameIntoClientArea(hwnd, &margins);
+        // See-through via the LEGACY blur-behind call, not the modern DWM
+        // backdrop. Measured on this machine (and independently in the sibling
+        // StudyApp project): DwmExtendFrameIntoClientArea + DWMWA_SYSTEMBACKDROP_TYPE
+        // move the window onto DWM's backdrop composition path, which then
+        // composites OPAQUELY - and DWM also paints its caption band across the
+        // top ~30px of the client, a hard horizontal edge that cannot be
+        // recoloured or switched off. DwmEnableBlurBehindWindow with a null blur
+        // region instead makes the whole window show what is behind it (alpha
+        // honoured by the compositor), so the desktop genuinely shows through
+        // (measured 68/336 sampled pixels change when the window moves over
+        // different desktop content). The Gaussian frost is NOT this call's
+        // doing - `glass.rs` draws the blurred snapshot in-process.
+        let blur = BlurBehind {
+            flags: DWM_BB_ENABLE,
+            enable: 1,
+            region: 0,
+            transition_on_maximized: 0,
+        };
+        let _ = DwmEnableBlurBehindWindow(hwnd, &blur);
 
-        // 2. live Acrylic; fall back to the Win10 accent policy
-        let backdrop = set_u32(DWMWA_SYSTEMBACKDROP_TYPE, DWMSBT_TRANSIENTWINDOW);
-        if backdrop != 0 {
-            type SetAccent = unsafe extern "system" fn(isize, *mut WcaData) -> i32;
-            let module: Vec<u16> = "user32.dll\0".encode_utf16().collect();
-            let lib = LoadLibraryW(module.as_ptr());
-            if lib != 0 {
-                let entry = GetProcAddress(lib, c"SetWindowCompositionAttribute".as_ptr().cast());
-                if !entry.is_null() {
-                    let set_accent: SetAccent = std::mem::transmute(entry);
-                    let policy = AccentPolicy {
-                        state: ACCENT_ENABLE_ACRYLICBLURBEHIND,
-                        flags: 2,
-                        gradient: 0x0100_0000,
-                        animation: 0,
-                    };
-                    let mut data = WcaData {
-                        attribute: WCA_ACCENT_POLICY,
-                        data: (&policy as *const AccentPolicy as *mut AccentPolicy).cast(),
-                        size: std::mem::size_of::<AccentPolicy>(),
-                    };
-                    let _ = set_accent(hwnd, &mut data);
-                }
-            }
-        }
-
-        // 3. rounded corners + dark DWM chrome
+        // 1. rounded corners + dark DWM chrome, and no border
         let _ = set_u32(DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND);
         let _ = set_u32(DWMWA_USE_IMMERSIVE_DARK_MODE, 1);
-
-        // 4. enforce frameless while keeping native resize, then kill the DWM border
-        normalise_frameless(hwnd);
         let _ = set_u32(DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE);
+
+        // 2. enforce frameless while keeping native resize, then install the
+        //    window procedure that keeps it that way
+        normalise_frameless(hwnd);
         if OLD_WNDPROC.load(std::sync::atomic::Ordering::Relaxed) == 0 {
             let proc = frameless_proc
                 as unsafe extern "system" fn(isize, u32, usize, isize) -> isize;
@@ -1697,7 +1854,7 @@ fn apply_backdrop(ui: &AppWindow) -> bool {
             }
         }
 
-        // 5. never keep an always-on-top bit (a leftover from an external tool
+        // 3. never keep an always-on-top bit (a leftover from an external tool
         //    would pin the window above every other app)
         const WS_EX_TOPMOST: isize = 0x0000_0008;
         const HWND_NOTOPMOST: isize = -2;
@@ -1744,6 +1901,279 @@ fn apply_backdrop(_ui: &AppWindow) -> bool {
 #[cfg(not(windows))]
 fn schedule_glass(_ui: Weak<AppWindow>, _tries: u32) {}
 
+/* ------------------------------ glass loop ------------------------------ */
+
+/// Set by `WM_DISPLAYCHANGE` (monitor hot-plug, removal, rearrangement or a
+/// resolution change): the stored capture no longer describes the desktop, so
+/// the loop takes one more. Cleared when it does.
+#[cfg(windows)]
+static GLASS_DISPLAY_CHANGED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// What the frosted backdrop has to do this tick.
+#[cfg(windows)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum GlassWork {
+    /// Nothing: the image is current.
+    None,
+    /// Photograph the desktop once more (`glass::capture`).
+    Capture,
+    /// Re-run downscale + Gaussian + the image upload from the stored shot.
+    /// No screen access at all.
+    Reblur,
+}
+
+/// The window must have been still this long before the backdrop re-captures,
+/// and it re-captures at most this often while it stays still: "stop moving,
+/// refresh" — a drag never touches the screen, so it can never lag.
+#[cfg(windows)]
+const GLASS_IDLE_REFRESH: Duration = Duration::from_millis(500);
+
+/// Backdrop policy, in one pure place so the tests can pin it down:
+/// * **never** touch the screen while the window is moving — that is what made
+///   dragging lag when every tick re-photographed the desktop;
+/// * once it has been still for `GLASS_IDLE_REFRESH` (and at most that often
+///   afterwards) capture again, so the frost follows what is behind the window
+///   instead of freezing at the startup shot;
+/// * a blur change re-blurs the stored shot — no screen access;
+/// * the settings' resample (or a display change) captures even when the window
+///   has not been idle long enough yet.
+#[cfg(windows)]
+fn glass_work(
+    has_shot: bool,
+    moving: bool,
+    refresh_due: bool,
+    blur_changed: bool,
+    recapture: bool,
+) -> GlassWork {
+    if moving {
+        return GlassWork::None;
+    }
+    if recapture || !has_shot {
+        return GlassWork::Capture;
+    }
+    if blur_changed {
+        return GlassWork::Reblur;
+    }
+    if refresh_due {
+        return GlassWork::Capture;
+    }
+    GlassWork::None
+}
+
+/// One iteration of the backdrop refresh loop (see the 33ms timer in `main`).
+///
+/// The loop does three jobs on every tick, each of them cheap when nothing
+/// changed:
+/// - writes a settled settings change to the store (slider drags fire every
+///   frame, so the write is debounced through `App::store_pending_at`);
+/// - runs the capture rule above; the capture + blur themselves run on a worker
+///   thread, so a 0.5s refresh cadence cannot stall the UI;
+/// - keeps the whole-desktop image registered with the desktop (see
+///   [`glass_place`]), so a move / resize only changes that placement.
+fn glass_step(weak: &Weak<AppWindow>, app_rc: &Rc<RefCell<App>>) {
+    let Some(ui) = weak.upgrade() else {
+        return;
+    };
+    let theme = ui.global::<Theme>();
+    let blur = theme.get_glass_blur();
+    let mut transparency = theme.get_glass_transparency();
+    let dark = theme.get_dark_mode();
+    let now = Instant::now();
+
+    let Ok(mut a) = app_rc.try_borrow_mut() else {
+        return;
+    };
+
+    // The Dark/Light tab flipped. Both themes carry their own tint strength, so
+    // remember the outgoing slider value and hand the incoming mode its stored
+    // one instead of dragging the old number across.
+    if dark != a.store.dark {
+        let previous_dark = a.store.dark;
+        a.store.set_transparency(previous_dark, transparency);
+        a.store.dark = dark;
+        transparency = a.store.transparency(dark);
+        theme.set_glass_transparency(transparency);
+        a.store_pending_at = Some(now + Duration::from_millis(650));
+    }
+
+    if let Some(at) = a.store_pending_at {
+        if now >= at {
+            a.store.dark = dark;
+            a.store.set_transparency(dark, transparency);
+            a.store.glass_blur = blur;
+            store::save(&a.store);
+            a.store_pending_at = None;
+        }
+    }
+
+    if blur <= 0.5 {
+        // Slider at zero: there is no blur layer at all. The tint alone sits
+        // over the compositor's transparent window — a sharp, always-live
+        // desktop — and the loop stays idle. The next non-zero value takes a
+        // fresh capture rather than reusing a shot that may be minutes old.
+        if ui.get_glass_backdrop_valid() {
+            ui.set_glass_backdrop(slint::Image::default());
+            ui.set_glass_backdrop_valid(false);
+        }
+        a.glass_shot = None;
+        a.glass_blur_at_render = None;
+        a.glass_last_origin = None;
+        return;
+    }
+
+    #[cfg(windows)]
+    {
+        let Some(hwnd) = hwnd_of(ui.window()) else {
+            return;
+        };
+        if GLASS_DISPLAY_CHANGED.swap(false, std::sync::atomic::Ordering::Relaxed) {
+            a.glass_recapture = true;
+        }
+        let Some(origin) = glass::window_origin(hwnd) else {
+            return;
+        };
+        // No origin yet (first tick) counts as "just moved": let the window
+        // settle before the first photograph.
+        let moving = a.glass_last_origin != Some(origin);
+        if moving {
+            a.glass_still_since = now;
+        }
+        a.glass_last_origin = Some(origin);
+        glass_place(&ui, &mut a);
+
+        if a.glass_pending {
+            return;
+        }
+        let blur = blur.round().clamp(0.0, 100.0) as u8;
+        let refresh_due = now.saturating_duration_since(a.glass_still_since) >= GLASS_IDLE_REFRESH
+            && now.saturating_duration_since(a.glass_last_grab) >= GLASS_IDLE_REFRESH;
+        let work = glass_work(
+            a.glass_shot.is_some(),
+            moving,
+            refresh_due,
+            a.glass_blur_at_render != Some(blur),
+            a.glass_recapture,
+        );
+        let capture = matches!(work, GlassWork::Capture);
+        if capture || matches!(work, GlassWork::Reblur) {
+            if capture {
+                a.glass_recapture = false;
+                a.glass_last_grab = now;
+            }
+            a.glass_pending = true;
+            let shot = a.glass_shot.take();
+            spawn_glass_grab(ui.as_weak(), hwnd, blur, capture, shot);
+        }
+    }
+}
+
+/// Capture (and/or blur) off the UI thread. A whole-desktop BitBlt plus the
+/// Gaussian costs tens of milliseconds: doing that on the UI thread twice a
+/// second would hitch, and doing it while the window moves is what made the
+/// old backdrop lag. One job at a time (`App::glass_pending`).
+#[cfg(windows)]
+fn spawn_glass_grab(
+    ui: Weak<AppWindow>,
+    hwnd: isize,
+    blur: u8,
+    capture: bool,
+    previous: Option<glass::Shot>,
+) {
+    std::thread::spawn(move || {
+        let shot = if capture {
+            match glass::capture(hwnd) {
+                Some((shot, hide)) => {
+                    glass_log(&format!("glass: capture ok (hide={})", hide.id()));
+                    Some(shot)
+                }
+                None => {
+                    glass_log("glass: capture failed, keeping the previous shot");
+                    previous
+                }
+            }
+        } else {
+            previous
+        };
+        let Some(shot) = shot else {
+            let _ = slint::invoke_from_event_loop(move || {
+                app(|a| a.glass_pending = false);
+            });
+            return;
+        };
+        let pixels = glass::render_pixels(&shot, blur);
+        let _ = slint::invoke_from_event_loop(move || {
+            let Some(u) = ui.upgrade() else {
+                return;
+            };
+            u.set_glass_backdrop(slint::Image::from_rgba8(pixels));
+            u.set_glass_backdrop_valid(true);
+            app(|a| {
+                a.glass_pending = false;
+                a.glass_shot = Some(shot);
+                a.glass_blur_at_render = Some(blur);
+                glass_place(&u, a);
+            });
+        });
+    });
+}
+
+/// Placement of the whole-desktop capture inside the window, in logical
+/// pixels: the capture origin relative to the window origin, then the capture
+/// size.
+///
+/// Keeping the image at the capture origin minus the current window origin is
+/// what pins it to the desktop — a move only changes this offset, never the
+/// capture (see `glass_work`). `scale` converts the physical coordinates to
+/// the logical units Slint lays out in, and a degenerate 0 clamps to 1 so the
+/// image can never collapse.
+#[cfg(windows)]
+fn backdrop_placement(
+    shot_origin: (i32, i32),
+    window_origin: (i32, i32),
+    shot: (usize, usize),
+    scale: f32,
+) -> (f32, f32, f32, f32) {
+    let scale = if scale <= 0.0 { 1.0 } else { scale };
+    (
+        (shot_origin.0 - window_origin.0) as f32 / scale,
+        (shot_origin.1 - window_origin.1) as f32 / scale,
+        shot.0 as f32 / scale,
+        shot.1 as f32 / scale,
+    )
+}
+
+/// Keep the backdrop registered with the desktop: place the whole-desktop
+/// image at the capture origin minus the window origin, in the same tick (and
+/// in the same pointer event, see the drag wiring) that moved the window.
+/// Does nothing until a shot exists or when the window has not moved, so the
+/// 33ms loop can call it freely.
+#[cfg(windows)]
+fn glass_place(ui: &AppWindow, a: &mut App) {
+    let Some((shot_origin, sw, sh)) = a
+        .glass_shot
+        .as_ref()
+        .map(|s| (s.origin, s.width, s.height))
+    else {
+        return;
+    };
+    let Some(hwnd) = hwnd_of(ui.window()) else {
+        return;
+    };
+    let Some(window_origin) = glass::window_origin(hwnd) else {
+        return;
+    };
+    let placed = backdrop_placement(shot_origin, window_origin, (sw, sh), ui.window().scale_factor());
+    if a.glass_placed == Some(placed) {
+        return;
+    }
+    a.glass_placed = Some(placed);
+    ui.set_glass_x(placed.0);
+    ui.set_glass_y(placed.1);
+    ui.set_glass_w(placed.2);
+    ui.set_glass_h(placed.3);
+}
+
 fn main() -> Result<(), slint::PlatformError> {
     let lib = Library::new(ROOT);
     let mut store = store::load();
@@ -1777,6 +2207,18 @@ fn main() -> Result<(), slint::PlatformError> {
         delete_timer: Timer::default(),
         probe_timer: Timer::default(),
         rig_timer: Timer::default(),
+        glass_shot: None,
+        glass_recapture: false,
+        glass_blur_at_render: None,
+        glass_placed: None,
+        glass_pending: false,
+        glass_still_since: std::time::Instant::now(),
+        glass_last_grab: std::time::Instant::now(),
+        glass_last_origin: None,
+        glass_timer: Timer::default(),
+        store_pending_at: None,
+        page_wheel_ready: std::time::Instant::now(),
+        rig_zoom_ready: std::time::Instant::now(),
     }));
     APP.with(|cell| {
         *cell.borrow_mut() = Some(app_rc.clone());
@@ -1787,6 +2229,17 @@ fn main() -> Result<(), slint::PlatformError> {
     // The .slint window no longer pins width/height (a constant binding froze the
     // surface size); set the initial size here, before the first show().
     ui.window().set_size(slint::PhysicalSize::new(1440u32, 900u32));
+
+    // Restore the persisted appearance before the first frame: these are the
+    // values the Settings sheet edits live (see `Store`).
+    {
+        let theme = ui.global::<Theme>();
+        if let Ok(a) = app_rc.try_borrow() {
+            theme.set_dark_mode(a.store.dark);
+            theme.set_glass_transparency(a.store.transparency(a.store.dark));
+            theme.set_glass_blur(a.store.glass_blur);
+        }
+    }
 
 
     // Initial data models.
@@ -1846,7 +2299,10 @@ fn main() -> Result<(), slint::PlatformError> {
     if let Ok(debug_view) = std::env::var("ALD_DEBUG_VIEW") {
         match debug_view.as_str() {
             "cart" => ui.invoke_open_cart(),
-            "rig" => {
+            "rig" | "rigbones" => {
+                if debug_view == "rigbones" {
+                    ui.set_rig_bones(true);
+                }
                 ui.invoke_select_tab(2);
                 let first_rig = app_rc
                     .try_borrow()
@@ -1878,6 +2334,8 @@ fn main() -> Result<(), slint::PlatformError> {
             "blender" => ui.invoke_blender_open_dialog(),
             "unity" => ui.invoke_unity_open_dialog(),
             "painter" => ui.invoke_painter_open_dialog(),
+            // Settings sheet (same as clicking the brand), for screenshots.
+            "settings" => ui.set_settings_open(true),
             _ => {}
         }
     }
@@ -1890,6 +2348,20 @@ fn main() -> Result<(), slint::PlatformError> {
 
     ui.show()?;
     schedule_glass(ui.as_weak(), 25);
+
+    // Backdrop refresh loop. The tick itself is cheap; `glass_step` decides
+    // whether it needs to capture and/or re-blur (the first capture, a
+    // resample, or a moved blur slider) and keeps the placement registered,
+    // so this can run at the animation cadence without work.
+    {
+        let weak = ui.as_weak();
+        let tick_app = app_rc.clone();
+        if let Ok(a) = app_rc.try_borrow() {
+            a.glass_timer.start(TimerMode::Repeated, Duration::from_millis(33), move || {
+                glass_step(&weak, &tick_app);
+            });
+        }
+    }
 
     ui.run()
 }
@@ -2061,6 +2533,34 @@ fn wire_callbacks(ui: &AppWindow, app_rc: &Rc<RefCell<App>>, drag: &Rc<WindowDra
             if let Ok(mut a) = app_rc.try_borrow_mut() {
                 let last = a.state.page_count() - 1;
                 a.state.page = (a.state.page + 1).min(last);
+                if let Some(u) = weak.upgrade() {
+                    sync_view(&u, &a);
+                    u.set_grid_scroll(0.0);
+                }
+            }
+        });
+    }
+    {
+        let app_rc = app_rc.clone();
+        let weak = ui.as_weak();
+        ui.on_page_wheel(move |direction| {
+            if direction == 0 {
+                return;
+            }
+            if let Ok(mut a) = app_rc.try_borrow_mut() {
+                // One physical notch arrives as a burst of smooth-scroll
+                // events: one page per gesture is what the hand expects.
+                let now = Instant::now();
+                if now < a.page_wheel_ready {
+                    return;
+                }
+                a.page_wheel_ready = now + Duration::from_millis(220);
+                let last = a.state.page_count().saturating_sub(1);
+                if direction > 0 {
+                    a.state.page = (a.state.page + 1).min(last);
+                } else {
+                    a.state.page = a.state.page.saturating_sub(1);
+                }
                 if let Some(u) = weak.upgrade() {
                     sync_view(&u, &a);
                     u.set_grid_scroll(0.0);
@@ -3299,6 +3799,9 @@ fn wire_callbacks(ui: &AppWindow, app_rc: &Rc<RefCell<App>>, drag: &Rc<WindowDra
                 let Some(s) = a.rig.as_mut() else {
                     return;
                 };
+                if s.base_pose {
+                    return; // the bind pose has no timeline
+                }
                 if s.playing {
                     s.playing = false;
                 } else {
@@ -3323,6 +3826,9 @@ fn wire_callbacks(ui: &AppWindow, app_rc: &Rc<RefCell<App>>, drag: &Rc<WindowDra
                 let Some(s) = a.rig.as_mut() else {
                     return;
                 };
+                if s.base_pose {
+                    return;
+                }
                 s.time = 0.0;
                 s.playing = s.duration > 0.0;
                 s.dirty = true;
@@ -3341,7 +3847,25 @@ fn wire_callbacks(ui: &AppWindow, app_rc: &Rc<RefCell<App>>, drag: &Rc<WindowDra
             if let Ok(mut a) = app_rc.try_borrow_mut() {
                 if let Some(s) = a.rig.as_mut() {
                     s.camera = raster::Camera::framed(s.aabb_min, s.aabb_max);
+                    s.zoom = 1.0;
+                    s.pan = [0.0; 3];
                     s.dirty = true;
+                }
+            }
+        });
+    }
+    {
+        let app_rc = app_rc.clone();
+        let weak = ui.as_weak();
+        ui.on_rig_toggle_bones(move || {
+            if let Ok(mut a) = app_rc.try_borrow_mut() {
+                if let Some(s) = a.rig.as_mut() {
+                    s.bones = !s.bones;
+                    s.dirty = true;
+                    let bones = s.bones;
+                    if let Some(u) = weak.upgrade() {
+                        u.set_rig_bones(bones);
+                    }
                 }
             }
         });
@@ -3362,18 +3886,54 @@ fn wire_callbacks(ui: &AppWindow, app_rc: &Rc<RefCell<App>>, drag: &Rc<WindowDra
                     return;
                 }
                 s.clip = idx;
+                s.base_pose = false;
                 s.time = 0.0;
                 s.duration = s.rig.clip_duration(idx);
                 s.playing = s.duration > 0.0;
                 s.dirty = true;
                 let (playing, duration) = (s.playing, s.duration);
                 if let Some(u) = weak.upgrade() {
+                    u.set_rig_base_pose(false);
                     u.set_rig_clip_index(index);
                     u.set_rig_duration(duration);
                     u.set_rig_seek_pos(0.0);
                     u.set_rig_playing(playing);
                     u.set_rig_time(rig_time_text(0.0, duration).into());
                 }
+            }
+        });
+    }
+    {
+        // The sidebar's top entry: show the skeleton in its bind pose.
+        let app_rc = app_rc.clone();
+        let weak = ui.as_weak();
+        ui.on_rig_select_base(move || {
+            if let Ok(mut a) = app_rc.try_borrow_mut() {
+                let Some(s) = a.rig.as_mut() else {
+                    return;
+                };
+                if s.base_pose {
+                    return;
+                }
+                s.base_pose = true;
+                s.dirty = true;
+                if let Some(u) = weak.upgrade() {
+                    u.set_rig_base_pose(true);
+                    u.set_rig_time("bind pose".to_string().into());
+                }
+            }
+        });
+    }
+    {
+        // Placeholder for the animation import workflow: it lands here next.
+        let app_rc = app_rc.clone();
+        let weak = ui.as_weak();
+        ui.on_rig_import(move || {
+            let Some(u) = weak.upgrade() else {
+                return;
+            };
+            if let Ok(mut a) = app_rc.try_borrow_mut() {
+                show_toast(&u, &mut a, "Animation import is not wired up yet", "info");
             }
         });
     }
@@ -3398,8 +3958,31 @@ fn wire_callbacks(ui: &AppWindow, app_rc: &Rc<RefCell<App>>, drag: &Rc<WindowDra
         ui.on_rig_orbit(move |dx, dy| {
             if let Ok(mut a) = app_rc.try_borrow_mut() {
                 if let Some(s) = a.rig.as_mut() {
-                    s.camera.yaw += dx * 0.01;
+                    // Drag right -> the model turns right (the camera orbits the
+                    // other way), which is what the hand expects.
+                    s.camera.yaw -= dx * 0.01;
                     s.camera.pitch = (s.camera.pitch + dy * 0.01).clamp(-1.4, 1.4);
+                    s.dirty = true;
+                }
+            }
+        });
+    }
+    {
+        let app_rc = app_rc.clone();
+        ui.on_rig_pan(move |dx, dy| {
+            if let Ok(mut a) = app_rc.try_borrow_mut() {
+                if let Some(s) = a.rig.as_mut() {
+                    let (right, up) = s.camera.basis();
+                    let wpp = s.camera.world_per_pixel(s.h as f32);
+                    // The scene follows the cursor: the camera target moves the
+                    // opposite way, inside the camera's own screen plane.
+                    let sx = -dx * wpp;
+                    let sy = dy * wpp;
+                    for k in 0..3 {
+                        let d = right[k] * sx + up[k] * sy;
+                        s.pan[k] += d;
+                        s.camera.target[k] += d;
+                    }
                     s.dirty = true;
                 }
             }
@@ -3409,14 +3992,15 @@ fn wire_callbacks(ui: &AppWindow, app_rc: &Rc<RefCell<App>>, drag: &Rc<WindowDra
         let app_rc = app_rc.clone();
         ui.on_rig_zoom(move |factor| {
             if let Ok(mut a) = app_rc.try_borrow_mut() {
+                // Wheel bursts collapse to one zoom step per gesture; button
+                // clicks (one event each) pass straight through.
+                let now = Instant::now();
+                if now < a.rig_zoom_ready {
+                    return;
+                }
+                a.rig_zoom_ready = now + Duration::from_millis(140);
                 if let Some(s) = a.rig.as_mut() {
-                    let d = [
-                        s.aabb_max[0] - s.aabb_min[0],
-                        s.aabb_max[1] - s.aabb_min[1],
-                        s.aabb_max[2] - s.aabb_min[2],
-                    ];
-                    let span = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt().max(1e-3);
-                    s.camera.dist = (s.camera.dist * factor).clamp(span * 0.12, span * 12.0);
+                    s.zoom = (s.zoom * factor).clamp(0.06, 8.0);
                     s.dirty = true;
                 }
             }
@@ -3433,8 +4017,41 @@ fn wire_callbacks(ui: &AppWindow, app_rc: &Rc<RefCell<App>>, drag: &Rc<WindowDra
         });
     }
     {
+        let ui_close = ui.as_weak();
         ui.on_win_close(move || {
+            // A settings change may still be inside its debounce window: copy
+            // the live values and flush the store once before quitting.
+            app(|a| {
+                if a.store_pending_at.take().is_some() {
+                    if let Some(u) = ui_close.upgrade() {
+                        let theme = u.global::<Theme>();
+                        let dark = theme.get_dark_mode();
+                        a.store.dark = dark;
+                        a.store.set_transparency(dark, theme.get_glass_transparency());
+                        a.store.glass_blur = theme.get_glass_blur();
+                    }
+                    store::save(&a.store);
+                }
+            });
             let _ = slint::quit_event_loop();
+        });
+    }
+
+    // --- settings sheet ----------------------------------------------------
+    {
+        ui.on_settings_changed(move || {
+            // Marks the store dirty with a short debounce: a slider drag fires
+            // this on every pointer move, and glass_step writes the JSON once
+            // the value settles (and re-blurs the stored shot on its next tick).
+            app(|a| a.store_pending_at = Some(Instant::now() + Duration::from_millis(650)));
+        });
+    }
+    {
+        // The settings sheet's resample button: the one deliberate capture
+        // after startup (see glass_work). The backdrop is otherwise never
+        // re-photographed.
+        ui.on_glass_resample(move || {
+            app(|a| a.glass_recapture = true);
         });
     }
 
@@ -3451,9 +4068,18 @@ fn wire_callbacks(ui: &AppWindow, app_rc: &Rc<RefCell<App>>, drag: &Rc<WindowDra
     {
         let weak = ui.as_weak();
         let drag = drag.clone();
+        let app_rc = app_rc.clone();
         ui.on_window_drag_move(move || {
             if let Some(u) = weak.upgrade() {
                 drag.move_to(&u.window());
+                // Re-register the backdrop in the same pointer event that
+                // moved the window, so the blur never trails the drag.
+                #[cfg(windows)]
+                if let Ok(mut a) = app_rc.try_borrow_mut() {
+                    glass_place(&u, &mut a);
+                }
+                #[cfg(not(windows))]
+                let _ = &app_rc;
             }
         });
     }

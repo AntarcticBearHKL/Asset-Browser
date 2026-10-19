@@ -1,5 +1,9 @@
 import { Theme, AssetItem, GridRow, CartRow, SpecRow, SlideItem, ClipItem } from "theme.slint";
-import { Plate, HLine, Btn, IconBtn, Tab, StatusIconBtn, Pick, TagChip, DialogHead, BridgeStatus, DialogField, Card, CartLine } from "components.slint";
+// Re-exported so main.rs can reach the settings properties through
+// `ui.global::<Theme>()`; an import alone does not put the global in Slint's
+// generated Rust API.
+export { Theme } from "theme.slint";
+import { Plate, HLine, Btn, Icon, IconBtn, Tab, StatusIconBtn, Pick, TagChip, DialogHead, BridgeStatus, DialogField, Card, CartLine, GlassSlider } from "components.slint";
 import { ListView, Slider } from "std-widgets.slint";
 
 // ---------------------------------------------------------------------------
@@ -13,7 +17,42 @@ export component AppWindow inherits Window {
     // plus an initial size pushed from Rust (main.rs) instead.
     min-width: 1368px;
     min-height: 620px;
-    background: Theme.window-bg;
+    // Transparent on the Window itself: the visible background is the glass
+    // stack below it (blurred snapshot + tint), not one flat colour.
+    background: transparent;
+
+    // ---- glass -------------------------------------------------------------
+    // Blurred desktop snapshot pushed in from Rust (`glass.rs`). `valid` stays
+    // false until the first snapshot arrives and while the blur slider sits at
+    // 0 — there the tint alone lets the compositor's transparent window show a
+    // sharp, always-live desktop (the pre-blur behaviour).
+    in property <image> glass-backdrop;
+    in property <bool> glass-backdrop-valid: false;
+    // Placement in window coordinates: the snapshot is the whole desktop (all
+    // monitors) and is pinned to the desktop by placing it at the capture
+    // origin minus the window origin, so a move only changes these values —
+    // never the capture behind them.
+    in property <length> glass-x: 0px;
+    in property <length> glass-y: 0px;
+    in property <length> glass-w: 0px;
+    in property <length> glass-h: 0px;
+
+    // Settings sheet, opened from the brand in the header.
+    in-out property <bool> settings-open: false;
+    callback settings-changed();
+    // Takes one fresh capture of the desktop: the deliberate re-sample in the
+    // settings sheet. The backdrop otherwise never re-photographs the screen
+    // because the window moved.
+    callback glass-resample();
+
+    // Mirrors of the Theme settings. The Theme global is declared in an
+    // imported file, which the Slint compiler does not expose to the generated
+    // Rust API — so the three values Rust has to read (to drive the rounding
+    // glass) and write (to restore the store) are re-declared here with a
+    // two-way binding instead.
+    in-out property <bool> dark-mode <=> Theme.dark-mode;
+    in-out property <float> glass-transparency <=> Theme.glass-transparency;
+    in-out property <float> glass-blur <=> Theme.glass-blur;
 
     // data
     in property <[AssetItem]> items: [];
@@ -84,6 +123,9 @@ export component AppWindow inherits Window {
 
     in property <int>                rig-clip-index: 0;
     in property <bool>               rig-playing: false;
+    in property <bool>               rig-bones: false;
+    // true while the sidebar's `Preview` (base skeleton) entry is selected.
+    in property <bool>               rig-base-pose: false;
     in-out property <string>         rig-time: "";
     in-out property <image>          detail-frame;
     in property <bool>               rig-has-3d: false;
@@ -147,6 +189,7 @@ export component AppWindow inherits Window {
     callback page-prev();
     callback page-next();
     callback page-last();
+    callback page-wheel(int);
     callback page-goto(int);
     callback page-goto-text(string);
     callback set-page-size(int);
@@ -196,9 +239,13 @@ export component AppWindow inherits Window {
     callback rig-toggle-play();
     callback rig-restart();
     callback rig-reset-view();
+    callback rig-toggle-bones();
     callback rig-select-clip(int);
+    callback rig-select-base();
+    callback rig-import();
     callback rig-seek(float);
     callback rig-orbit(float, float);
+    callback rig-pan(float, float);
     callback rig-zoom(float);
     callback win-minimize();
     callback win-close();
@@ -207,6 +254,23 @@ export component AppWindow inherits Window {
     callback window-drag-start();
     callback window-drag-move();
     callback window-drag-end();
+
+    // ---- glass -------------------------------------------------------------
+    // Snapshot first, tint above it: together they are the window background.
+    // Declared before the shell so they paint under everything else.
+    if root.glass-backdrop-valid : Image {
+        x: root.glass-x;
+        y: root.glass-y;
+        width: root.glass-w;
+        height: root.glass-h;
+        source: root.glass-backdrop;
+        image-fit: fill;
+    }
+    Rectangle {
+        width: root.width;
+        height: root.height;
+        background: Theme.window-bg;
+    }
 
     // ---- shell -------------------------------------------------------------
     VerticalLayout {
@@ -258,8 +322,10 @@ export component AppWindow inherits Window {
                 padding-bottom: 12px;
                 spacing: 12px;
 
-                // brand (drag zone)
-                Rectangle {
+                // brand: opens the Settings sheet. The header's own drag area
+                // sits underneath (declared first), so every other header spot
+                // still starts a window move.
+                brand := Rectangle {
                     width: 176px;
                     // No explicit height: inside this padded HorizontalLayout an
                     // explicit height sticks the box to the content top, so the
@@ -269,11 +335,36 @@ export component AppWindow inherits Window {
                         font-family: "Haettenschweiler";
                         font-size: 20px;
                         letter-spacing: -0.4px;
-                        color: Theme.text;
-                        width: parent.width;
+                        color: brand-ta.has-hover ? Theme.accent : Theme.text;
+                        animate color { duration: 130ms; easing: ease-out; }
+                        width: parent.width - 22px;
                         height: parent.height;
                         vertical-alignment: center;
                         overflow: elide;
+                    }
+                    // Sliders glyph = "this opens settings"; fades in on hover so
+                    // the header stays a plain wordmark at rest.
+                    Rectangle {
+                        x: parent.width - 18px;
+                        y: (parent.height - self.height) / 2;
+                        width: 18px;
+                        height: 18px;
+                        opacity: brand-ta.has-hover ? 1 : 0;
+                        animate opacity { duration: 130ms; easing: ease-out; }
+                        Icon {
+                            size: 18px;
+                            tint: Theme.accent;
+                            commands: "M 3 7 L 21 7 M 3 12 L 21 12 M 3 17 L 21 17 M 9.5 4.5 L 9.5 9.5 M 15 9.5 L 15 14.5 M 8 14.5 L 8 19.5";
+                        }
+                    }
+                    brand-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            // A toolbar pick popup on screen would swallow the
+                            // sheet's clicks through its full-size scrim.
+                            root.pick-open = -1;
+                            root.settings-open = true;
+                        }
                     }
                 }
 
@@ -460,6 +551,20 @@ export component AppWindow inherits Window {
         Rectangle {
             vertical-stretch: 1;
             background: transparent;
+            // Wheel over the grid flips one page per notch. Declared *behind*
+            // the cards: clicks still reach them, and the list keeps its own
+            // scrolling; this only sees events the cards/list did not use.
+            // Slint reports a Windows wheel-down as a negative delta.
+            TouchArea {
+                scroll-event(ev) => {
+                    if (ev.delta-y < 0) {
+                        root.page-wheel(1);
+                    } else if (ev.delta-y > 0) {
+                        root.page-wheel(-1);
+                    }
+                    return accept;
+                }
+            }
             if root.rows.length > 0 : ListView {
                 content-y <=> root.grid-scroll;
                 for row in root.rows : HorizontalLayout {
@@ -731,7 +836,7 @@ export component AppWindow inherits Window {
         sheet := Rectangle {
             x: (root.width - self.width) / 2;
             y: (root.height - self.height) / 2;
-            width: min(root.width - 32px, 1180px);
+            width: min(root.width - 32px, 1340px);
             height: min(root.height - 32px, 800px);
             background: Theme.surface;
             border-width: 1px;
@@ -745,10 +850,87 @@ export component AppWindow inherits Window {
                 height: parent.height;
                 spacing: 0px;
 
+                // ---- animation sidebar (rigs only) --------------------------
+                // The skeleton is the first level ("Preview" = its bind pose);
+                // its animations hang under it. Importing lands at the bottom.
+                if root.rig-has-3d : Rectangle {
+                    width: 216px;
+                    background: Theme.surface-2;
+                    VerticalLayout {
+                        padding: 10px;
+                        spacing: 8px;
+                        Text {
+                            text: "SKELETON";
+                            color: Theme.text-faint;
+                            font-family: "Cascadia Mono";
+                            font-size: 10px;
+                            vertical-alignment: center;
+                        }
+                        anims-flick := Flickable {
+                            vertical-stretch: 1;
+                            content-width: anims-flick.width;
+                            content-height: max(anims-flick.height, (root.clips.length + 1) * 30px);
+                            VerticalLayout {
+                                width: anims-flick.width;
+                                spacing: 2px;
+
+                                Rectangle {
+                                    height: 30px;
+                                    background: root.rig-base-pose ? Theme.accent : (base-ta.has-hover ? Theme.hover : transparent);
+                                    border-radius: 5px;
+                                    base-ta := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => { root.rig-select-base(); }
+                                    }
+                                    Text {
+                                        x: 10px; y: 0px;
+                                        width: parent.width - 20px;
+                                        height: parent.height;
+                                        text: "Preview";
+                                        color: root.rig-base-pose ? Theme.accent-fg : Theme.text;
+                                        font-family: "Cascadia Mono";
+                                        font-size: 11px;
+                                        vertical-alignment: center;
+                                        overflow: elide;
+                                    }
+                                }
+
+                                for c[i] in root.clips : Rectangle {
+                                    height: 28px;
+                                    background: (!root.rig-base-pose && i == root.rig-clip-index) ? Theme.accent : (clip-ta.has-hover ? Theme.hover : transparent);
+                                    border-radius: 5px;
+                                    clip-ta := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => { root.rig-select-clip(i); }
+                                    }
+                                    Text {
+                                        x: 22px; y: 0px;
+                                        width: parent.width - 32px;
+                                        height: parent.height;
+                                        text: c.name;
+                                        color: (!root.rig-base-pose && i == root.rig-clip-index) ? Theme.accent-fg : Theme.text-dim;
+                                        font-family: "Cascadia Mono";
+                                        font-size: 11px;
+                                        vertical-alignment: center;
+                                        overflow: elide;
+                                    }
+                                }
+                            }
+                        }
+                        Btn {
+                            label: "Import animation…";
+                            height: 30px;
+                            font-size: 11px;
+                            mono: true;
+                            clicked => { root.rig-import(); }
+                        }
+                    }
+                }
+
                 // ---- preview column (70%) ----
                 Rectangle {
                     horizontal-stretch: 7;
-                    min-width: parent.width * 0.7 - 1px;
+                    min-width: parent.width * 0.55 - 1px;
                     background: Theme.surface;
                     VerticalLayout {
                         padding: 14px;
@@ -800,12 +982,34 @@ export component AppWindow inherits Window {
                                 mouse-cursor: grab;
                                 property <length> prev-x: 0px;
                                 property <length> prev-y: 0px;
-                                moved => {
-                                    if (self.pressed) {
-                                        root.rig-orbit((self.mouse-x - self.prev-x) / 1px, (self.mouse-y - self.prev-y) / 1px);
+                                // 1 = orbit (left button), 2 = pan (middle button)
+                                property <int> drag-mode: 0;
+                                pointer-event(ev) => {
+                                    if (ev.kind == PointerEventKind.down) {
+                                        self.drag-mode = (ev.button == PointerEventButton.left) ? 1
+                                            : (ev.button == PointerEventButton.middle) ? 2 : 0;
+                                        self.prev-x = self.mouse-x;
+                                        self.prev-y = self.mouse-y;
+                                    } else if (ev.kind == PointerEventKind.up || ev.kind == PointerEventKind.cancel) {
+                                        self.drag-mode = 0;
                                     }
-                                    self.prev-x = self.mouse-x;
-                                    self.prev-y = self.mouse-y;
+                                }
+                                moved => {
+                                    if (self.drag-mode == 1) {
+                                        root.rig-orbit((self.mouse-x - self.prev-x) / 1px, (self.mouse-y - self.prev-y) / 1px);
+                                    } else if (self.drag-mode == 2) {
+                                        root.rig-pan((self.mouse-x - self.prev-x) / 1px, (self.mouse-y - self.prev-y) / 1px);
+                                    }
+                                    if (self.drag-mode != 0) {
+                                        self.prev-x = self.mouse-x;
+                                        self.prev-y = self.mouse-y;
+                                    }
+                                }
+                                scroll-event(ev) => {
+                                    // Windows wheel-up arrives as a negative
+                                    // delta; up zooms in, down zooms out.
+                                    root.rig-zoom(ev.delta-y < 0 ? 1.1 : 0.9);
+                                    return accept;
                                 }
                             }
                         }
@@ -837,45 +1041,7 @@ export component AppWindow inherits Window {
                             IconBtn { size: 30px; commands: "M 5 12 L 19 12"; clicked => { root.rig-zoom(1.25); } }
                             IconBtn { size: 30px; commands: "M 12 5 L 12 19 M 5 12 L 19 12"; clicked => { root.rig-zoom(0.8); } }
                             Btn { label: "Reset view"; height: 30px; font-size: 11px; mono: true; clicked => { root.rig-reset-view(); } }
-                        }
-
-                        // clip list (rig only)
-                        if root.rig-has-3d && root.clips.length > 0 : Rectangle {
-                            height: 92px;
-                            background: Theme.surface-2;
-                            border-width: 1px;
-                            border-color: Theme.border;
-                            border-radius: 8px;
-                            clip: true;
-                            clips-flick := Flickable {
-                                content-width: clips-flick.width;
-                                content-height: max(clips-flick.height, root.clips.length * 30px);
-                                VerticalLayout {
-                                    width: clips-flick.width;
-                                    padding: 4px;
-                                    spacing: 2px;
-                                    for c[i] in root.clips : Rectangle {
-                                        height: 28px;
-                                        background: (i == root.rig-clip-index) ? Theme.accent : (clip-ta.has-hover ? Theme.hover : transparent);
-                                        border-radius: 5px;
-                                        clip-ta := TouchArea {
-                                            mouse-cursor: pointer;
-                                            clicked => { root.rig-select-clip(i); }
-                                        }
-                                        Text {
-                                            x: 10px; y: 0px;
-                                            width: parent.width - 20px;
-                                            height: parent.height;
-                                            text: c.name;
-                                            color: (i == root.rig-clip-index) ? Theme.accent-fg : Theme.text-dim;
-                                            font-family: "Cascadia Mono";
-                                            font-size: 11px;
-                                            vertical-alignment: center;
-                                            overflow: elide;
-                                        }
-                                    }
-                                }
-                            }
+                            Btn { label: root.rig-bones ? "Bones: on" : "Bones: off"; height: 30px; font-size: 11px; mono: true; clicked => { root.rig-toggle-bones(); } }
                         }
 
                         // filmstrip
@@ -1616,6 +1782,180 @@ export component AppWindow inherits Window {
                         font-size: 13px;
                         vertical-alignment: center;
                         overflow: elide;
+                    }
+                }
+            }
+        }
+    }
+
+    // ============ settings sheet ============
+    // Opened from the brand. Its controls write straight into Theme (so the
+    // whole token set switches live); `settings-changed` lets main.rs persist
+    // and re-tune the glass. Declared last so it covers toast and popups.
+    if root.settings-open : Rectangle {
+        width: root.width;
+        height: root.height;
+        background: Theme.overlay;
+        TouchArea { clicked => { root.settings-open = false; } }
+        settings-sheet := Rectangle {
+            x: (root.width - self.width) / 2;
+            y: (root.height - self.height) / 2;
+            width: min(root.width - 32px, 520px);
+            height: 434px;
+            background: Theme.surface;
+            border-width: 1px;
+            border-color: Theme.border-strong;
+            border-radius: 12px;
+            clip: true;
+            TouchArea { }
+            VerticalLayout {
+                padding: 20px;
+                spacing: 14px;
+
+                HorizontalLayout {
+                    height: 34px;
+                    Text {
+                        text: "SETTINGS";
+                        font-family: "Haettenschweiler";
+                        font-size: 24px;
+                        letter-spacing: -0.5px;
+                        color: Theme.text;
+                        horizontal-stretch: 1;
+                        vertical-alignment: center;
+                    }
+                    IconBtn { size: 30px; commands: "M 5 5 L 19 19 M 19 5 L 5 19"; clicked => { root.settings-open = false; } }
+                }
+                HLine { }
+
+                HorizontalLayout {
+                    height: 34px;
+                    spacing: 10px;
+                    Text {
+                        text: "Theme";
+                        font-family: "Arial";
+                        font-size: 13px;
+                        color: Theme.text-dim;
+                        width: 120px;
+                        vertical-alignment: center;
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                    Tab {
+                        label: "Dark";
+                        width: 92px;
+                        active: Theme.dark-mode;
+                        clicked => { Theme.dark-mode = true; root.settings-changed(); }
+                    }
+                    Tab {
+                        label: "Light";
+                        width: 92px;
+                        active: !Theme.dark-mode;
+                        clicked => { Theme.dark-mode = false; root.settings-changed(); }
+                    }
+                }
+
+                VerticalLayout {
+                    spacing: 4px;
+                    HorizontalLayout {
+                        height: 20px;
+                        Text {
+                            text: "Transparency";
+                            font-family: "Arial";
+                            font-size: 13px;
+                            color: Theme.text-dim;
+                            horizontal-stretch: 1;
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            text: "\{round(Theme.glass-transparency)}%";
+                            font-family: "Cascadia Mono";
+                            font-size: 12px;
+                            color: Theme.text;
+                            vertical-alignment: center;
+                        }
+                    }
+                    GlassSlider {
+                        value <=> Theme.glass-transparency;
+                        slid(v) => { root.settings-changed(); }
+                    }
+                }
+
+                VerticalLayout {
+                    spacing: 4px;
+                    HorizontalLayout {
+                        height: 20px;
+                        Text {
+                            text: "Blur";
+                            font-family: "Arial";
+                            font-size: 13px;
+                            color: Theme.text-dim;
+                            horizontal-stretch: 1;
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            text: "\{round(Theme.glass-blur)}%";
+                            font-family: "Cascadia Mono";
+                            font-size: 12px;
+                            color: Theme.text;
+                            vertical-alignment: center;
+                        }
+                    }
+                    GlassSlider {
+                        value <=> Theme.glass-blur;
+                        slid(v) => { root.settings-changed(); }
+                    }
+                }
+
+                HorizontalLayout {
+                    height: 34px;
+                    spacing: 10px;
+                    Text {
+                        text: "Backdrop";
+                        font-family: "Arial";
+                        font-size: 13px;
+                        color: Theme.text-dim;
+                        horizontal-stretch: 1;
+                        vertical-alignment: center;
+                    }
+                    Btn {
+                        label: "Resample";
+                        width: 110px;
+                        height: 34px;
+                        clicked => { root.glass-resample(); }
+                    }
+                }
+
+                Text {
+                    text: "Gaussian blur of the desktop behind the window; the capture stays registered to the screen as the window moves. Resample takes a fresh capture; 0 turns the blur layer off entirely.";
+                    font-family: "Arial";
+                    font-size: 11px;
+                    color: Theme.text-faint;
+                    wrap: word-wrap;
+                    height: 42px;
+                }
+
+                Rectangle { vertical-stretch: 1; }
+
+                HorizontalLayout {
+                    height: 36px;
+                    spacing: 10px;
+                    Rectangle { horizontal-stretch: 1; }
+                    Btn {
+                        label: "Reset";
+                        width: 96px;
+                        height: 34px;
+                        clicked => {
+                            // Restore the shipped look: 20% tint, full blur.
+                            Theme.glass-transparency = 20;
+                            Theme.glass-blur = 100;
+                            root.settings-changed();
+                        }
+                    }
+                    Btn {
+                        label: "Done";
+                        primary: true;
+                        width: 96px;
+                        height: 34px;
+                        clicked => { root.settings-open = false; }
                     }
                 }
             }

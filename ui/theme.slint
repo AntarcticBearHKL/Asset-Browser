@@ -1,33 +1,53 @@
-// 3D Asset Browser — dark, frameless, frosted-glass design system.
-// Layout is fully rewritten: every panel stretches, nothing depends on a fixed
-// window width. Palette follows the bilibili-slint dark tokens so the Acrylic
-// backdrop (main.rs) reads through the translucent window background.
+// 3D Asset Browser — frameless, frosted-glass design system in a dark and a
+// light theme. Layout is fully rewritten: every panel stretches, nothing
+// depends on a fixed window width.
+//
+// The frosted background is two layers: the blurred desktop snapshot that Rust
+// refreshes continuously (glass.rs — a real Gaussian blur of what is behind the
+// window) and the tint below. Tokens switch as one set on `dark-mode`.
 
 // ---------------------------------------------------------------------------
 // Tokens
 // ---------------------------------------------------------------------------
 export global Theme {
-    // Window surface is translucent: the DWM Acrylic backdrop shows through it.
-    out property <color> window-bg: #121212A6;
-    out property <color> surface: #1E1E1E;
-    out property <color> surface-2: #242424;
-    out property <color> hover: #2A2A2A;
-    out property <color> well: #242424;
-    out property <color> divider: #2E2E2E;
-    out property <color> border: #3A3A3A;
-    out property <color> border-strong: #4A4A4A;
-    out property <color> text: #E8E8E8;
-    out property <color> text-dim: #9A9A9A;
-    out property <color> text-faint: #7A7A7A;
-    out property <color> accent: #3EA6FF;
-    out property <color> accent-fg: #0B0B0B;
-    out property <color> ok: #4ADE80;
-    out property <color> warn: #E8A45C;
-    out property <color> danger: #FF6B6B;
-    out property <color> overlay: #000000A8;
-    out property <color> blender: #E87D0D;
-    out property <color> unity: #C8C8C8;
-    out property <color> painter: #FF5A5A;
+    // ---- settings (persisted by main.rs, edited in the Settings sheet) ----
+    in-out property <bool> dark-mode: true;
+    // 0 = matte, 100 = maximally see-through. Drives the tint alpha below. The
+    // tint strength is remembered per theme (main.rs keeps one value for each);
+    // both ship at 20%.
+    in-out property <float> glass-transparency: 20;
+    // 0 = no blur layer at all: the tint alone sits over the compositor's own
+    // transparent window (a sharp, always-live desktop). Above 0 the blurred
+    // snapshot replaces the compositor's see-through, strength is `glass.rs`.
+    in-out property <float> glass-blur: 100;
+
+    // Tint above the blurred snapshot. Its alpha is the slider's complement, so
+    // the default 20 leaves 0.8 alpha over the glass; the slider lets the user go
+    // lighter or darker from there. Only ever judged over the blurred snapshot
+    // (or, at blur 0, over the live desktop).
+    out property <color> window-bg: (Theme.dark-mode ? #121212 : #F4F5F7).transparentize(Theme.glass-transparency / 100);
+    out property <color> surface: Theme.dark-mode ? #1E1E1E : #FFFFFF;
+    out property <color> surface-2: Theme.dark-mode ? #242424 : #F0F1F4;
+    out property <color> hover: Theme.dark-mode ? #2C2C2C : #E7E9EE;
+    out property <color> well: Theme.dark-mode ? #232323 : #F2F3F6;
+    out property <color> divider: Theme.dark-mode ? #303030 : #E1E3E8;
+    out property <color> border: Theme.dark-mode ? #3C3C3C : #D5D8E0;
+    out property <color> border-strong: Theme.dark-mode ? #545454 : #B9BDC7;
+    // Text tokens are contrast-checked against every surface they land on
+    // (surface / surface-2 / hover / window-bg) in both themes: body >= 12:1,
+    // secondary >= 6:1, faint/secondary labels >= 4.5:1 (WCAG AA small text).
+    out property <color> text: Theme.dark-mode ? #F2F2F2 : #15161A;
+    out property <color> text-dim: Theme.dark-mode ? #B4B4B4 : #4C4E57;
+    out property <color> text-faint: Theme.dark-mode ? #949494 : #63666F;
+    out property <color> accent: Theme.dark-mode ? #3EA6FF : #0A63C2;
+    out property <color> accent-fg: Theme.dark-mode ? #0B0B0B : #FFFFFF;
+    out property <color> ok: Theme.dark-mode ? #4ADE80 : #0C7032;
+    out property <color> warn: Theme.dark-mode ? #E8A45C : #9A5A0A;
+    out property <color> danger: Theme.dark-mode ? #FF6B6B : #C22F2F;
+    out property <color> overlay: Theme.dark-mode ? #000000A8 : #00000059;
+    out property <color> blender: Theme.dark-mode ? #E87D0D : #985100;
+    out property <color> unity: Theme.dark-mode ? #D0D0D0 : #5E616A;
+    out property <color> painter: Theme.dark-mode ? #FF5A5A : #B82A2A;
 }
 
 // ---------------------------------------------------------------------------

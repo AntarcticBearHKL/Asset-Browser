@@ -2,121 +2,35 @@
 //!
 //! Flattens a scene into one vertex/triangle list plus per-vertex
 //! `JOINTS_0`/`WEIGHTS_0`; unskinned props get a synthetic single-bone joint on
-//! their own node. Invariant: a skinned vertex is `Σ wᵢ·(jointGlobalᵢ·inverseBindᵢ)·p`
-//! with the skinned node's own transform ignored (glTF) and `inverseBind` world-relative.
+//! their own node.
+//!
+//! Invariants:
+//! * a skinned vertex is `Σ wᵢ·(jointGlobalᵢ·inverseBindᵢ)·p`, with `w` normalised
+//!   at load and the skinned node's own transform ignored (glTF: the joints
+//!   already place the vertices in world space);
+//! * an unskinned vertex is baked into world space at load and rides a synthetic
+//!   joint whose inverse bind is its own node's bind global, so it follows the
+//!   bone it is parented to;
+//! * clips are ordered like the asset's `.clips.json` (falling back to the GLB
+//!   order), and `Idle` is the default selection.
+
+mod anim;
+mod math;
+
+pub use math::{Mat4, Vec3};
 
 use std::collections::HashMap;
 
-pub type Mat4 = [[f32; 4]; 4];
-pub type Vec3 = [f32; 3];
-pub type Quat = [f32; 4]; // x, y, z, w (matches glTF)
+use anim::{Channel, Clip, Interp, Path, Values};
+use math::{identity, mat4_inverse, mat4_mul, normalize3, transform_dir, transform_point, Trs};
 
-/// Default local transform of one node.
-#[derive(Clone, Copy)]
-struct NodeTrs {
-    t: Vec3,
-    r: Quat,
-    s: Vec3,
-}
-
-impl Default for NodeTrs {
-    fn default() -> Self {
-        NodeTrs {
-            t: [0.0, 0.0, 0.0],
-            r: [0.0, 0.0, 0.0, 1.0],
-            s: [1.0, 1.0, 1.0],
-        }
-    }
-}
-
-/// Which TRS property an animation channel drives.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Path {
-    Translation,
-    Rotation,
-    Scale,
-}
-
-/// The value stream of one channel.
-enum Values {
-    Vec(Vec<Vec3>),
-    Quat(Vec<Quat>),
-}
-
-/// One animation channel: a node property plus its sampled keyframes.
-struct Channel {
-    node: usize,
-    path: Path,
-    times: Vec<f32>,
-    values: Values,
-    /// STEP holds the left key; everything else interpolates.
-    step: bool,
-}
-
-impl Channel {
-    fn sample_vec3(&self, t: f32) -> Option<Vec3> {
-        let (v, step) = match &self.values {
-            Values::Vec(v) => (v, self.step),
-            Values::Quat(_) => return None,
-        };
-        let (i, j, a) = sample_at(&self.times, t)?;
-        let v0 = *v.get(i)?;
-        let v1 = *v.get(j)?;
-        if step || i == j {
-            Some(v0)
-        } else {
-            Some(lerp3(v0, v1, a))
-        }
-    }
-
-    fn sample_quat(&self, t: f32) -> Option<Quat> {
-        let v = match &self.values {
-            Values::Quat(v) => v,
-            Values::Vec(_) => return None,
-        };
-        let (i, j, a) = sample_at(&self.times, t)?;
-        let q0 = *v.get(i)?;
-        let q1 = *v.get(j)?;
-        if self.step || i == j {
-            Some(q0)
-        } else {
-            Some(slerp(q0, q1, a))
-        }
-    }
-}
-
-/// One animation clip.
-pub struct Clip {
-    pub name: String,
-    pub duration: f32,
-    channels: Vec<Channel>,
-}
-
-impl Clip {
-    fn apply(&self, trs: &mut [NodeTrs], time: f32) {
-        for ch in &self.channels {
-            if ch.node >= trs.len() {
-                continue;
-            }
-            match ch.path {
-                Path::Translation => {
-                    if let Some(v) = ch.sample_vec3(time) {
-                        trs[ch.node].t = v;
-                    }
-                }
-                Path::Rotation => {
-                    if let Some(v) = ch.sample_quat(time) {
-                        trs[ch.node].r = v;
-                    }
-                }
-                Path::Scale => {
-                    if let Some(v) = ch.sample_vec3(time) {
-                        trs[ch.node].s = v;
-                    }
-                }
-            }
-        }
-    }
+/// World-space poses of every visible vertex at one clip time.
+pub struct Pose {
+    pub positions: Vec<Vec3>,
+    pub normals: Vec<Vec3>,
+    /// Bounds of the deformed mesh — what the camera frames.
+    pub min: Vec3,
+    pub max: Vec3,
 }
 
 /// A loaded, skinnable rig ready for the CPU rasterizer.
@@ -129,21 +43,24 @@ pub struct Rig {
     pub indices: Vec<u32>,
     /// Per-vertex joint indices into the unified joint list.
     vjoints: Vec<[u16; 4]>,
-    /// Per-vertex joint weights.
+    /// Per-vertex joint weights (normalised).
     vweights: Vec<[f32; 4]>,
     /// Unified joint list: skin joints first, then one synthetic joint per static
     /// mesh node. Node index into `nodes`.
     joint_nodes: Vec<usize>,
     inverse_bind: Vec<Mat4>,
-    nodes: Vec<NodeTrs>,
+    nodes: Vec<Trs>,
     parents: Vec<Option<usize>>,
     clips: Vec<Clip>,
+    /// Clip to open on (see `pick_default_clip`).
+    default_clip: usize,
     aabb_min: Vec3,
     aabb_max: Vec3,
 }
 
 impl Rig {
-    /// Display clips: `(name, duration)` with the `<slug>__` prefix stripped.
+    /// Display clips: `(name, duration)` in the asset's own order, with the
+    /// `<slug>__` prefix stripped.
     pub fn clips(&self) -> Vec<(String, f32)> {
         self.clips
             .iter()
@@ -151,13 +68,19 @@ impl Rig {
             .collect()
     }
 
-    /// Raw clip count (used by the tests / transport).
     pub fn clip_count(&self) -> usize {
         self.clips.len()
     }
 
     pub fn clip_duration(&self, clip: usize) -> f32 {
         self.clips.get(clip).map(|c| c.duration).unwrap_or(0.0)
+    }
+
+    /// The clip to open on: an animated `Idle` when the asset has one, else
+    /// the first clip that actually moves the skeleton (a pose line-up often
+    /// starts with a frozen `00_T-pose` take).
+    pub fn default_clip(&self) -> usize {
+        self.default_clip
     }
 
     /// Number of unified joints (skin joints + synthetic static-mesh joints).
@@ -172,18 +95,29 @@ impl Rig {
         (self.aabb_min, self.aabb_max)
     }
 
+    /// Node TRS at `time` in `clip` (defaults for anything the clip omits).
+    fn posed_nodes(&self, clip: usize, time: f32) -> Vec<Trs> {
+        let mut trs = self.nodes.clone();
+        if let Some(c) = self.clips.get(clip) {
+            c.apply(&mut trs, time);
+        }
+        trs
+    }
+
     /// The world `4×4` matrix of every unified joint at `time` in `clip`.
     ///
-    /// `clip` out of range or a clip shorter than `time` falls back to the bind pose.
+    /// `clip` out of range falls back to the bind pose.
     pub fn joint_matrices(&self, clip: usize, time: f32) -> Vec<Mat4> {
-        let globals = match self.clips.get(clip) {
-            Some(c) => {
-                let mut trs = self.nodes.clone();
-                c.apply(&mut trs, time);
-                compute_globals(&trs, &self.parents)
-            }
-            None => compute_globals(&self.nodes, &self.parents),
-        };
+        self.palette(&compute_globals(&self.posed_nodes(clip, time), &self.parents))
+    }
+
+    /// Joint palette at the file's own bind pose — no clip applied. This is
+    /// what the viewer shows for the skeleton's `Preview` entry.
+    pub fn bind_matrices(&self) -> Vec<Mat4> {
+        self.palette(&compute_globals(&self.nodes, &self.parents))
+    }
+
+    fn palette(&self, globals: &[Mat4]) -> Vec<Mat4> {
         let mut out = Vec::with_capacity(self.joint_nodes.len());
         for (j, node) in self.joint_nodes.iter().enumerate() {
             let g = globals.get(*node).copied().unwrap_or_else(identity);
@@ -193,7 +127,7 @@ impl Rig {
         out
     }
 
-    /// Linear-blend skinning: deformed world positions + normals.
+    /// Deformed world positions and normals for a joint palette.
     pub fn skin(&self, joints: &[Mat4]) -> (Vec<Vec3>, Vec<Vec3>) {
         let n = self.rest_positions.len();
         let mut pos = vec![[0.0f32; 3]; n];
@@ -206,6 +140,7 @@ impl Rig {
             let w = self.vweights.get(v).copied().unwrap_or([1.0, 0.0, 0.0, 0.0]);
             let mut acc = [0.0f32; 3];
             let mut nac = [0.0f32; 3];
+            let mut total = 0.0f32;
             for k in 0..4 {
                 let wk = w[k];
                 if wk <= 0.0 {
@@ -220,17 +155,131 @@ impl Rig {
                 nac[0] += tn[0] * wk;
                 nac[1] += tn[1] * wk;
                 nac[2] += tn[2] * wk;
+                total += wk;
             }
-            pos[v] = acc;
+            if total <= 1e-8 {
+                // A vertex with no usable influence stays where it was rather
+                // than collapsing onto the origin.
+                pos[v] = p;
+                nrm[v] = nn;
+                continue;
+            }
+            let inv = 1.0 / total;
+            pos[v] = [acc[0] * inv, acc[1] * inv, acc[2] * inv];
             let len2 = nac[0] * nac[0] + nac[1] * nac[1] + nac[2] * nac[2];
             nrm[v] = if len2 > 1e-12 {
-                let inv = 1.0 / len2.sqrt();
-                [nac[0] * inv, nac[1] * inv, nac[2] * inv]
+                let s = 1.0 / len2.sqrt();
+                [nac[0] * s, nac[1] * s, nac[2] * s]
             } else {
                 nn
             };
         }
         (pos, nrm)
+    }
+
+    /// Skinning at one clip time, plus the deformed bounds the camera frames.
+    pub fn pose(&self, clip: usize, time: f32) -> Pose {
+        let joints = self.joint_matrices(clip, time);
+        let (positions, normals) = self.skin(&joints);
+        self.finish_pose(positions, normals)
+    }
+
+    /// The bind pose (no clip): what the `Preview` view shows. Skinned with
+    /// the bind palette, which reproduces the rest geometry exactly.
+    pub fn pose_bind(&self) -> Pose {
+        let (positions, normals) = self.skin(&self.bind_matrices());
+        self.finish_pose(positions, normals)
+    }
+
+    fn finish_pose(&self, positions: Vec<Vec3>, normals: Vec<Vec3>) -> Pose {
+        let (mut min, mut max) = ([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]);
+        for p in &positions {
+            for a in 0..3 {
+                min[a] = min[a].min(p[a]);
+                max[a] = max[a].max(p[a]);
+            }
+        }
+        if !min.iter().chain(max.iter()).all(|v| v.is_finite()) {
+            (min, max) = (self.aabb_min, self.aabb_max);
+        }
+        Pose {
+            positions,
+            normals,
+            min,
+            max,
+        }
+    }
+
+    /// Skeleton segments at `time` in `clip`, as `[parent, child]` world
+    /// positions — one per joint that has another joint as its parent.
+    pub fn skeleton(&self, clip: usize, time: f32) -> Vec<[[f32; 3]; 2]> {
+        self.skeleton_of(&compute_globals(&self.posed_nodes(clip, time), &self.parents))
+    }
+
+    /// Skeleton segments at the bind pose (no clip).
+    pub fn skeleton_bind(&self) -> Vec<[[f32; 3]; 2]> {
+        self.skeleton_of(&compute_globals(&self.nodes, &self.parents))
+    }
+
+    fn skeleton_of(&self, globals: &[Mat4]) -> Vec<[[f32; 3]; 2]> {
+        let mut is_joint = vec![false; self.nodes.len()];
+        for &n in &self.joint_nodes {
+            if n < is_joint.len() {
+                is_joint[n] = true;
+            }
+        }
+        let at = |n: usize| -> Vec3 {
+            let m = &globals[n];
+            [m[3][0], m[3][1], m[3][2]]
+        };
+        let mut out = Vec::new();
+        for (i, parent) in self.parents.iter().enumerate() {
+            if !is_joint.get(i).copied().unwrap_or(false) {
+                continue;
+            }
+            let Some(p) = parent else { continue };
+            if *p == i || !is_joint.get(*p).copied().unwrap_or(false) {
+                continue;
+            }
+            out.push([at(*p), at(i)]);
+        }
+        out
+    }
+
+    /// Test-only: one line per channel — `(node, path, keys, t0, t1, spread)`
+    /// where `spread` is the largest component range across the channel's
+    /// values. Used by `diag_rig_animation_coverage` to explain clips that do
+    /// not move anything.
+    #[cfg(test)]
+    pub fn channel_summary(&self, clip: usize) -> Vec<(usize, &'static str, usize, f32, f32, f32)> {
+        let Some(c) = self.clips.get(clip) else {
+            return Vec::new();
+        };
+        c.channels
+            .iter()
+            .map(|ch| {
+                let (t0, t1) = match (ch.times.first(), ch.times.last()) {
+                    (Some(a), Some(b)) => (*a, *b),
+                    _ => (0.0, 0.0),
+                };
+                let spread = match &ch.values {
+                    anim::Values::Vecs(v) => spread3(v),
+                    anim::Values::Quats(v) => spread4(v),
+                };
+                let path = match ch.path {
+                    Path::Translation => "T",
+                    Path::Rotation => "R",
+                    Path::Scale => "S",
+                };
+                (ch.node, path, ch.times.len(), t0, t1, spread)
+            })
+            .collect()
+    }
+
+    /// Test-only: whether a node is one of the unified joints.
+    #[cfg(test)]
+    pub fn node_is_joint(&self, node: usize) -> bool {
+        self.joint_nodes.contains(&node)
     }
 
     /// Skinning at the default (bind) pose.
@@ -239,6 +288,32 @@ impl Rig {
     pub fn bind_pose(&self) -> (Vec<Vec3>, Vec<Vec3>) {
         (self.rest_positions.clone(), self.rest_normals.clone())
     }
+}
+
+#[cfg(test)]
+fn spread3(values: &[[f32; 3]]) -> f32 {
+    let mut lo = [f32::INFINITY; 3];
+    let mut hi = [f32::NEG_INFINITY; 3];
+    for v in values {
+        for k in 0..3 {
+            lo[k] = lo[k].min(v[k]);
+            hi[k] = hi[k].max(v[k]);
+        }
+    }
+    (0..3).map(|k| hi[k] - lo[k]).fold(0.0f32, f32::max)
+}
+
+#[cfg(test)]
+fn spread4(values: &[[f32; 4]]) -> f32 {
+    let mut lo = [f32::INFINITY; 4];
+    let mut hi = [f32::NEG_INFINITY; 4];
+    for v in values {
+        for k in 0..4 {
+            lo[k] = lo[k].min(v[k]);
+            hi[k] = hi[k].max(v[k]);
+        }
+    }
+    (0..4).map(|k| hi[k] - lo[k]).fold(0.0f32, f32::max)
 }
 
 /// Load a `.glb`/`.gltf` and flatten it into a skinnable rig.
@@ -250,7 +325,7 @@ pub fn load(path: &str) -> Result<Rig, String> {
 
     // ---- node graph (default TRS + parents) ------------------------------
     let n_nodes = doc.nodes().count();
-    let mut nodes = vec![NodeTrs::default(); n_nodes];
+    let mut nodes = vec![Trs::default(); n_nodes];
     let mut parents: Vec<Option<usize>> = vec![None; n_nodes];
     for node in doc.nodes() {
         let i = node.index();
@@ -258,7 +333,7 @@ pub fn load(path: &str) -> Result<Rig, String> {
             continue;
         }
         let (t, r, s) = node.transform().decomposed();
-        nodes[i] = NodeTrs { t, r, s };
+        nodes[i] = Trs { t, r, s };
         for child in node.children() {
             let c = child.index();
             if c < n_nodes {
@@ -288,6 +363,29 @@ pub fn load(path: &str) -> Result<Rig, String> {
     }
     let mut static_joint: HashMap<usize, usize> = HashMap::new();
 
+    // A rig that has a skin may also carry *unskinned copies of the same body*
+    // (exported pose line-ups: 30–40 frozen duplicates, one skinned). Those
+    // copies can never follow the animation, so only the live character is
+    // kept; bone-attached props stay because their node sits under a joint.
+    let skinned_rig = doc
+        .nodes()
+        .any(|n| n.mesh().is_some() && n.skin().is_some());
+    let skin_joints: std::collections::HashSet<usize> = joint_nodes.iter().copied().collect();
+    let under_joint = |mut i: usize| -> bool {
+        for _ in 0..64 {
+            match parents.get(i).copied().flatten() {
+                Some(p) => {
+                    if skin_joints.contains(&p) {
+                        return true;
+                    }
+                    i = p;
+                }
+                None => return false,
+            }
+        }
+        false
+    };
+
     // ---- geometry --------------------------------------------------------
     let mut rest_positions: Vec<Vec3> = Vec::new();
     let mut rest_normals: Vec<Vec3> = Vec::new();
@@ -297,6 +395,9 @@ pub fn load(path: &str) -> Result<Rig, String> {
 
     for node in doc.nodes() {
         let Some(mesh) = node.mesh() else { continue };
+        if skinned_rig && node.skin().is_none() && !under_joint(node.index()) {
+            continue;
+        }
         let node_idx = node.index();
         let node_global = globals.get(node_idx).copied().unwrap_or_else(identity);
         let skin_block = node
@@ -354,9 +455,20 @@ pub fn load(path: &str) -> Result<Rig, String> {
                         // Skinned verts keep their mesh-local rest position; the
                         // node's own transform is ignored (glTF spec).
                         rest_positions.push(p);
-                        rest_normals.push(normalize(nn));
+                        rest_normals.push(normalize3(nn));
                         let j = prim_joints.get(k).copied().unwrap_or([0, 0, 0, 0]);
-                        let w = prim_weights.get(k).copied().unwrap_or([0.0, 0.0, 0.0, 0.0]);
+                        let mut w = prim_weights
+                            .get(k)
+                            .copied()
+                            .unwrap_or([0.0, 0.0, 0.0, 0.0]);
+                        let sum: f32 = w.iter().sum();
+                        if sum > 1e-6 {
+                            for x in &mut w {
+                                *x /= sum;
+                            }
+                        } else {
+                            w = [1.0, 0.0, 0.0, 0.0];
+                        }
                         let map = |x: u16| -> u16 {
                             (sb + x as usize).min(u16::MAX as usize) as u16
                         };
@@ -365,7 +477,7 @@ pub fn load(path: &str) -> Result<Rig, String> {
                     }
                     None => {
                         rest_positions.push(transform_point(&node_global, p));
-                        rest_normals.push(normalize(transform_dir(&node_global, nn)));
+                        rest_normals.push(normalize3(transform_dir(&node_global, nn)));
                         let j = static_idx.unwrap_or(0).min(u16::MAX as usize) as u16;
                         vjoints.push([j, 0, 0, 0]);
                         vweights.push([1.0, 0.0, 0.0, 0.0]);
@@ -408,11 +520,11 @@ pub fn load(path: &str) -> Result<Rig, String> {
 
     // ---- clips -----------------------------------------------------------
     let mut clips: Vec<Clip> = Vec::new();
-    for anim in doc.animations() {
-        let name = anim.name().unwrap_or("").to_string();
+    for animation in doc.animations() {
+        let name = animation.name().unwrap_or("").to_string();
         let mut channels: Vec<Channel> = Vec::new();
         let mut duration = 0.0f32;
-        for ch in anim.channels() {
+        for ch in animation.channels() {
             let target = ch.target();
             let path = match target.property() {
                 gltf::animation::Property::Translation => Path::Translation,
@@ -426,14 +538,12 @@ pub fn load(path: &str) -> Result<Rig, String> {
                 continue;
             }
             let sampler = ch.sampler();
-            let cubic = matches!(
-                sampler.interpolation(),
-                gltf::animation::Interpolation::CubicSpline
-            );
-            let step = matches!(
-                sampler.interpolation(),
-                gltf::animation::Interpolation::Step
-            );
+            let interp = match sampler.interpolation() {
+                gltf::animation::Interpolation::Step => Interp::Step,
+                gltf::animation::Interpolation::CubicSpline => Interp::Cubic,
+                // Linear is the default and the format's other value.
+                _ => Interp::Linear,
+            };
             let reader = ch.reader(&get_buf);
             let times: Vec<f32> = reader.read_inputs().map(|it| it.collect()).unwrap_or_default();
             if times.is_empty() {
@@ -441,16 +551,13 @@ pub fn load(path: &str) -> Result<Rig, String> {
             }
             let values = match reader.read_outputs() {
                 Some(gltf::animation::util::ReadOutputs::Translations(it)) => {
-                    let raw: Vec<Vec3> = it.collect();
-                    Values::Vec(reduce_cubic(raw, cubic))
+                    Values::Vecs(it.collect())
                 }
                 Some(gltf::animation::util::ReadOutputs::Rotations(it)) => {
-                    let raw: Vec<Quat> = it.into_f32().collect();
-                    Values::Quat(reduce_cubic(raw, cubic))
+                    Values::Quats(it.into_f32().collect())
                 }
                 Some(gltf::animation::util::ReadOutputs::Scales(it)) => {
-                    let raw: Vec<Vec3> = it.collect();
-                    Values::Vec(reduce_cubic(raw, cubic))
+                    Values::Vecs(it.collect())
                 }
                 _ => continue,
             };
@@ -463,8 +570,8 @@ pub fn load(path: &str) -> Result<Rig, String> {
                 node,
                 path,
                 times,
+                interp,
                 values,
-                step,
             });
         }
         clips.push(Clip {
@@ -473,6 +580,8 @@ pub fn load(path: &str) -> Result<Rig, String> {
             channels,
         });
     }
+    reorder_clips(path, &mut clips);
+    let default_clip = pick_default_clip(&nodes, &parents, &clips);
 
     Ok(Rig {
         rest_positions,
@@ -485,9 +594,84 @@ pub fn load(path: &str) -> Result<Rig, String> {
         nodes,
         parents,
         clips,
+        default_clip,
         aabb_min,
         aabb_max,
     })
+}
+
+/// Pick the clip to open on: an animated `Idle` if there is one, else the first
+/// clip whose skeleton actually moves. Pose line-ups often start with a frozen
+/// `00_T-pose` take, which would look like "the animation is not applied".
+fn pick_default_clip(nodes: &[Trs], parents: &[Option<usize>], clips: &[Clip]) -> usize {
+    let animated: Vec<bool> = clips
+        .iter()
+        .map(|c| clip_moves(nodes, parents, c))
+        .collect();
+    let idle = clips
+        .iter()
+        .position(|c| strip_clip_prefix(&c.name).eq_ignore_ascii_case("idle"));
+    match idle {
+        Some(i) if animated.get(i).copied().unwrap_or(false) => i,
+        _ => animated.iter().position(|a| *a).unwrap_or(0),
+    }
+}
+
+/// Whether `clip` changes any node's global transform over its duration.
+fn clip_moves(nodes: &[Trs], parents: &[Option<usize>], clip: &Clip) -> bool {
+    if clip.duration <= 0.0 || clip.channels.is_empty() {
+        return false;
+    }
+    let global_at = |t: f32| {
+        let mut trs = nodes.to_vec();
+        clip.apply(&mut trs, t);
+        compute_globals(&trs, parents)
+    };
+    let base = global_at(0.0);
+    for k in 1..=3 {
+        let m = global_at(clip.duration * k as f32 / 3.0);
+        let moved = m.iter().zip(&base).any(|(a, b)| {
+            (0..4).any(|c| (0..4).any(|r| (a[c][r] - b[c][r]).abs() > 1e-5))
+        });
+        if moved {
+            return true;
+        }
+    }
+    false
+}
+
+/// Read `<stem>.clips.json` next to the GLB and put the clips in the asset's
+/// catalog order, so a rig opens on `Idle` instead of whatever the exporter
+/// wrote first. Clips the JSON does not mention keep their GLB order at the
+/// end; a missing file leaves the GLB order untouched.
+fn reorder_clips(glb_path: &str, clips: &mut Vec<Clip>) {
+    let sidecar = std::path::Path::new(glb_path).with_extension("clips.json");
+    let Ok(text) = std::fs::read_to_string(&sidecar) else {
+        return;
+    };
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return;
+    };
+    let Some(list) = json.get("clips").and_then(|v| v.as_array()) else {
+        return;
+    };
+    let mut slots: Vec<Option<Clip>> = clips.drain(..).map(Some).collect();
+    let mut ordered: Vec<Clip> = Vec::with_capacity(slots.len());
+    for name in list.iter().filter_map(|c| c.get("name")?.as_str()) {
+        let want = strip_clip_prefix(name);
+        let found = slots.iter().position(|slot| {
+            slot.as_ref()
+                .map(|c| strip_clip_prefix(&c.name) == want)
+                .unwrap_or(false)
+        });
+        if let Some(i) = found {
+            if let Some(clip) = slots[i].take() {
+                ordered.push(clip);
+            }
+        }
+    }
+    ordered.extend(slots.into_iter().flatten());
+    *clips = ordered;
 }
 
 /// Drop everything up to and including the first `__` (mirrors `stripClipPrefix`).
@@ -498,23 +682,8 @@ fn strip_clip_prefix(name: &str) -> String {
     }
 }
 
-/// Keep the mid (value) key of CUBICSPLINE's `[in-tangent, value, out-tangent]`
-/// triplets; the tangents are ignored and the channel is interpolated linearly.
-fn reduce_cubic<T: Copy>(v: Vec<T>, cubic: bool) -> Vec<T> {
-    if !cubic {
-        return v;
-    }
-    let mut out = Vec::with_capacity(v.len() / 3 + 1);
-    let mut i = 1;
-    while i < v.len() {
-        out.push(v[i]);
-        i += 3;
-    }
-    out
-}
-
 /// Resolve the global matrix of each node, memoising along the way.
-fn compute_globals(nodes: &[NodeTrs], parents: &[Option<usize>]) -> Vec<Mat4> {
+fn compute_globals(nodes: &[Trs], parents: &[Option<usize>]) -> Vec<Mat4> {
     let n = nodes.len();
     let mut out = vec![identity(); n];
     let mut state = vec![0u8; n]; // 0 = unseen, 1 = in progress, 2 = done
@@ -526,7 +695,7 @@ fn compute_globals(nodes: &[NodeTrs], parents: &[Option<usize>]) -> Vec<Mat4> {
 
 fn resolve_global(
     i: usize,
-    nodes: &[NodeTrs],
+    nodes: &[Trs],
     parents: &[Option<usize>],
     out: &mut [Mat4],
     state: &mut [u8],
@@ -536,12 +705,12 @@ fn resolve_global(
     }
     if state[i] == 1 {
         // Cycle guard: fall back to the local transform.
-        out[i] = local_matrix(&nodes[i]);
+        out[i] = nodes[i].matrix();
         state[i] = 2;
         return;
     }
     state[i] = 1;
-    let local = local_matrix(&nodes[i]);
+    let local = nodes[i].matrix();
     let parent = parents.get(i).copied().flatten();
     match parent {
         Some(p) if p < nodes.len() && p != i => {
@@ -551,217 +720,4 @@ fn resolve_global(
         _ => out[i] = local,
     }
     state[i] = 2;
-}
-
-/// `(i, j, alpha)` such that `times[i] <= t < times[j]` (or the clamped ends).
-fn sample_at(times: &[f32], t: f32) -> Option<(usize, usize, f32)> {
-    let n = times.len();
-    if n == 0 || !t.is_finite() {
-        return None;
-    }
-    if n == 1 || t <= times[0] {
-        return Some((0, (n - 1).max(0), 0.0));
-    }
-    let last = times[n - 1];
-    if t >= last {
-        return Some((n - 1, n - 1, 0.0));
-    }
-    let (mut lo, mut hi) = (0usize, n - 1);
-    while hi - lo > 1 {
-        let mid = (lo + hi) / 2;
-        if times[mid] <= t {
-            lo = mid;
-        } else {
-            hi = mid;
-        }
-    }
-    let (t0, t1) = (times[lo], times[hi]);
-    let dt = t1 - t0;
-    let a = if dt > 0.0 { (t - t0) / dt } else { 0.0 };
-    Some((lo, hi, a.clamp(0.0, 1.0)))
-}
-
-/* ------------------------------ math ------------------------------------ */
-
-pub fn identity() -> Mat4 {
-    [
-        [1.0, 0.0, 0.0, 0.0],
-        [0.0, 1.0, 0.0, 0.0],
-        [0.0, 0.0, 1.0, 0.0],
-        [0.0, 0.0, 0.0, 1.0],
-    ]
-}
-
-fn quat_mat4(q: Quat) -> Mat4 {
-    let [x, y, z, w] = q;
-    let (xx, yy, zz) = (x * x, y * y, z * z);
-    let (xy, xz, yz) = (x * y, x * z, y * z);
-    let (wx, wy, wz) = (w * x, w * y, w * z);
-    [
-        [1.0 - 2.0 * (yy + zz), 2.0 * (xy + wz), 2.0 * (xz - wy), 0.0],
-        [2.0 * (xy - wz), 1.0 - 2.0 * (xx + zz), 2.0 * (yz + wx), 0.0],
-        [2.0 * (xz + wy), 2.0 * (yz - wx), 1.0 - 2.0 * (xx + yy), 0.0],
-        [0.0, 0.0, 0.0, 1.0],
-    ]
-}
-
-fn local_matrix(n: &NodeTrs) -> Mat4 {
-    let mut m = quat_mat4(n.r);
-    for col in 0..3 {
-        for row in 0..3 {
-            m[col][row] *= n.s[col];
-        }
-    }
-    m[3][0] = n.t[0];
-    m[3][1] = n.t[1];
-    m[3][2] = n.t[2];
-    m[3][3] = 1.0;
-    m
-}
-
-/// Column-major `a * b`.
-pub fn mat4_mul(a: &Mat4, b: &Mat4) -> Mat4 {
-    let mut c = [[0.0f32; 4]; 4];
-    for col in 0..4 {
-        for row in 0..4 {
-            let mut s = 0.0;
-            for k in 0..4 {
-                s += a[k][row] * b[col][k];
-            }
-            c[col][row] = s;
-        }
-    }
-    c
-}
-
-fn transform_point(m: &Mat4, p: Vec3) -> Vec3 {
-    [
-        m[0][0] * p[0] + m[1][0] * p[1] + m[2][0] * p[2] + m[3][0],
-        m[0][1] * p[0] + m[1][1] * p[1] + m[2][1] * p[2] + m[3][1],
-        m[0][2] * p[0] + m[1][2] * p[1] + m[2][2] * p[2] + m[3][2],
-    ]
-}
-
-fn transform_dir(m: &Mat4, v: Vec3) -> Vec3 {
-    [
-        m[0][0] * v[0] + m[1][0] * v[1] + m[2][0] * v[2],
-        m[0][1] * v[0] + m[1][1] * v[1] + m[2][1] * v[2],
-        m[0][2] * v[0] + m[1][2] * v[1] + m[2][2] * v[2],
-    ]
-}
-
-/// General 4×4 inverse (column-major, gl-matrix algorithm). Falls back to the
-/// identity for a singular matrix.
-pub fn mat4_inverse(m: &Mat4) -> Mat4 {
-    let a = |c: usize, r: usize| m[c][r];
-    let a00 = a(0, 0);
-    let a01 = a(0, 1);
-    let a02 = a(0, 2);
-    let a03 = a(0, 3);
-    let a10 = a(1, 0);
-    let a11 = a(1, 1);
-    let a12 = a(1, 2);
-    let a13 = a(1, 3);
-    let a20 = a(2, 0);
-    let a21 = a(2, 1);
-    let a22 = a(2, 2);
-    let a23 = a(2, 3);
-    let a30 = a(3, 0);
-    let a31 = a(3, 1);
-    let a32 = a(3, 2);
-    let a33 = a(3, 3);
-
-    let b00 = a00 * a11 - a01 * a10;
-    let b01 = a00 * a12 - a02 * a10;
-    let b02 = a00 * a13 - a03 * a10;
-    let b03 = a01 * a12 - a02 * a11;
-    let b04 = a01 * a13 - a03 * a11;
-    let b05 = a02 * a13 - a03 * a12;
-    let b06 = a20 * a31 - a21 * a30;
-    let b07 = a20 * a32 - a22 * a30;
-    let b08 = a20 * a33 - a23 * a30;
-    let b09 = a21 * a32 - a22 * a31;
-    let b10 = a21 * a33 - a23 * a31;
-    let b11 = a22 * a33 - a23 * a32;
-
-    let det = b00 * b11 - b01 * b10 + b02 * b09 + b03 * b08 - b04 * b07 + b05 * b06;
-    if det.abs() < 1e-20 || !det.is_finite() {
-        return identity();
-    }
-    let inv = 1.0 / det;
-
-    let mut o = [[0.0f32; 4]; 4];
-    o[0][0] = (a11 * b11 - a12 * b10 + a13 * b09) * inv;
-    o[0][1] = (a02 * b10 - a01 * b11 - a03 * b09) * inv;
-    o[0][2] = (a31 * b05 - a32 * b04 + a33 * b03) * inv;
-    o[0][3] = (a22 * b04 - a21 * b05 - a23 * b03) * inv;
-    o[1][0] = (a12 * b08 - a10 * b11 - a13 * b07) * inv;
-    o[1][1] = (a00 * b11 - a02 * b08 + a03 * b07) * inv;
-    o[1][2] = (a32 * b02 - a30 * b05 - a33 * b01) * inv;
-    o[1][3] = (a20 * b05 - a22 * b02 + a23 * b01) * inv;
-    o[2][0] = (a10 * b10 - a11 * b08 + a13 * b06) * inv;
-    o[2][1] = (a01 * b08 - a00 * b10 - a03 * b06) * inv;
-    o[2][2] = (a30 * b04 - a31 * b02 + a33 * b00) * inv;
-    o[2][3] = (a21 * b02 - a20 * b04 - a23 * b00) * inv;
-    o[3][0] = (a11 * b07 - a10 * b09 - a12 * b06) * inv;
-    o[3][1] = (a00 * b09 - a01 * b07 + a02 * b06) * inv;
-    o[3][2] = (a31 * b01 - a30 * b03 - a32 * b00) * inv;
-    o[3][3] = (a20 * b03 - a21 * b01 + a22 * b00) * inv;
-    o
-}
-
-fn lerp3(a: Vec3, b: Vec3, t: f32) -> Vec3 {
-    [
-        a[0] + (b[0] - a[0]) * t,
-        a[1] + (b[1] - a[1]) * t,
-        a[2] + (b[2] - a[2]) * t,
-    ]
-}
-
-fn slerp(a: Quat, b: Quat, t: f32) -> Quat {
-    let mut b = b;
-    let mut d = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3];
-    if d < 0.0 {
-        b = [-b[0], -b[1], -b[2], -b[3]];
-        d = -d;
-    }
-    if d > 0.9995 {
-        return normalize4([
-            a[0] + (b[0] - a[0]) * t,
-            a[1] + (b[1] - a[1]) * t,
-            a[2] + (b[2] - a[2]) * t,
-            a[3] + (b[3] - a[3]) * t,
-        ]);
-    }
-    let theta0 = d.clamp(-1.0, 1.0).acos();
-    let sin0 = theta0.sin();
-    if sin0.abs() < 1e-8 {
-        return a;
-    }
-    let s0 = ((1.0 - t) * theta0).sin() / sin0;
-    let s1 = (t * theta0).sin() / sin0;
-    [
-        a[0] * s0 + b[0] * s1,
-        a[1] * s0 + b[1] * s1,
-        a[2] * s0 + b[2] * s1,
-        a[3] * s0 + b[3] * s1,
-    ]
-}
-
-fn normalize4(v: Quat) -> Quat {
-    let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2] + v[3] * v[3]).sqrt();
-    if l > 1e-12 {
-        [v[0] / l, v[1] / l, v[2] / l, v[3] / l]
-    } else {
-        [0.0, 0.0, 0.0, 1.0]
-    }
-}
-
-fn normalize(v: Vec3) -> Vec3 {
-    let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
-    if l > 1e-12 {
-        [v[0] / l, v[1] / l, v[2] / l]
-    } else {
-        [0.0, 0.0, 1.0]
-    }
 }

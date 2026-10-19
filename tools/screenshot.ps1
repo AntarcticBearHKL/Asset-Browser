@@ -6,6 +6,7 @@
 #   powershell -ExecutionPolicy Bypass -File tools/screenshot.ps1 -Out grid.png
 #   powershell -ExecutionPolicy Bypass -File tools/screenshot.ps1 -View cart    -Out cart.png
 #   powershell -ExecutionPolicy Bypass -File tools/screenshot.ps1 -View rig     -Out rig.png
+#   powershell -ExecutionPolicy Bypass -File tools/screenshot.ps1 -View rigbones -Out rigbones.png
 #   powershell -ExecutionPolicy Bypass -File tools/screenshot.ps1 -View blender -Out blender.png
 #
 # -View uses the app's ALD_DEBUG_VIEW hook, which invokes the matching callback at
@@ -13,7 +14,7 @@
 param(
     [string]$Exe = "$PSScriptRoot\..\target\debug\asset-library-desktop.exe",
     [string]$Out = "$env:TEMP\ald-shot.png",
-    [ValidateSet('grid', 'cart', 'rig', 'model', 'cat', 'blender', 'unity', 'painter')][string]$View = '',
+    [ValidateSet('grid', 'cart', 'rig', 'rigbones', 'model', 'cat', 'blender', 'unity', 'painter', 'settings')][string]$View = '',
     [int]$Wait = 10000,
     [switch]$Offscreen,
     [switch]$Keep
@@ -68,9 +69,10 @@ while ((Get-Date) -lt $deadline) {
 if ($h -eq [IntPtr]::Zero) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue; throw "no window appeared within ${Wait}ms" }
 Start-Sleep -Milliseconds 1500
 
-# Foreground + real screen capture: DWM's acrylic/mica backdrop is composited by the
-# OS, so only a screen grab can show it (PrintWindow only sees the window's own
-# drawing). HWND_TOPMOST (-1) + SWP_NOSIZE (0x1) + SWP_SHOWWINDOW (0x40).
+# Foreground + real screen capture: the window is translucent over the desktop (with
+# glass.rs blurring what shows through), so only a screen grab captures the glass
+# (PrintWindow only sees the window's own drawing). HWND_TOPMOST (-1) + SWP_NOSIZE (0x1)
+# + SWP_SHOWWINDOW (0x40).
 [void][ShotU]::SetWindowPos($h, [IntPtr](-1), 40, 40, 0, 0, 0x0001 -bor 0x0040)
 [void][ShotU]::SetForegroundWindow($h)
 Start-Sleep -Milliseconds 900

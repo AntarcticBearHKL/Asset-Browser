@@ -3,6 +3,23 @@
 
 use std::path::PathBuf;
 
+fn dark_default() -> bool {
+    true
+}
+/// The shipped look: a light tint (20% transparency) over a strong frost
+/// (100% blur) in both themes; the value is still remembered per theme, so
+/// switching Dark/Light never drags one theme's number into the other's.
+/// `Reset` in the settings sheet restores these.
+fn transparency_dark_default() -> f32 {
+    20.0
+}
+fn transparency_light_default() -> f32 {
+    20.0
+}
+fn blur_default() -> f32 {
+    100.0
+}
+
 /// Everything that survives a restart.
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct Store {
@@ -20,6 +37,18 @@ pub struct Store {
     pub painter_bridge: String,
     #[serde(default)]
     pub painter_root: String,
+    /// Settings sheet: theme + glass sliders (0..100).
+    #[serde(default = "dark_default")]
+    pub dark: bool,
+    /// The tint strength is remembered per theme: switching Dark/Light must not
+    /// drag one number across two palettes (both ship at 20%, but the user can
+    /// set each theme independently).
+    #[serde(default = "transparency_dark_default")]
+    pub glass_transparency_dark: f32,
+    #[serde(default = "transparency_light_default")]
+    pub glass_transparency_light: f32,
+    #[serde(default = "blur_default")]
+    pub glass_blur: f32,
 }
 
 impl Default for Store {
@@ -32,6 +61,10 @@ impl Default for Store {
             painter_base: "http://localhost:60041".to_string(),
             painter_bridge: "http://localhost:60041".to_string(),
             painter_root: crate::ROOT.to_string(),
+            dark: dark_default(),
+            glass_transparency_dark: transparency_dark_default(),
+            glass_transparency_light: transparency_light_default(),
+            glass_blur: blur_default(),
         }
     }
 }
@@ -58,6 +91,35 @@ impl Store {
         if self.painter_root.trim().is_empty() {
             self.painter_root = d.painter_root;
         }
+        // Slider values arrive from JSON, where a hand-edited or old file can
+        // hold anything; out-of-range or non-finite values fall back.
+        if !(0.0..=100.0).contains(&self.glass_transparency_dark) {
+            self.glass_transparency_dark = d.glass_transparency_dark;
+        }
+        if !(0.0..=100.0).contains(&self.glass_transparency_light) {
+            self.glass_transparency_light = d.glass_transparency_light;
+        }
+        if !(0.0..=100.0).contains(&self.glass_blur) {
+            self.glass_blur = d.glass_blur;
+        }
+    }
+
+    /// The tint strength the given theme last used.
+    pub fn transparency(&self, dark: bool) -> f32 {
+        if dark {
+            self.glass_transparency_dark
+        } else {
+            self.glass_transparency_light
+        }
+    }
+
+    /// Remember the tint strength for the given theme.
+    pub fn set_transparency(&mut self, dark: bool, value: f32) {
+        if dark {
+            self.glass_transparency_dark = value;
+        } else {
+            self.glass_transparency_light = value;
+        }
     }
 }
 
@@ -69,11 +131,18 @@ pub fn path() -> PathBuf {
     base.join("asset-library-desktop").join("store.json")
 }
 
+/// Parse a store document. A leading UTF-8 BOM is tolerated because
+/// PowerShell's `Set-Content -Encoding UTF8` (and some editors) write one, and
+/// `serde_json` rejects it — a hand-edited store must not silently reset.
+fn parse(text: &str) -> Option<Store> {
+    serde_json::from_str::<Store>(text.strip_prefix('\u{feff}').unwrap_or(text)).ok()
+}
+
 /// Missing/corrupt store ⇒ `Default`.
 pub fn load() -> Store {
     let mut store = std::fs::read_to_string(path())
         .ok()
-        .and_then(|t| serde_json::from_str::<Store>(&t).ok())
+        .and_then(|t| parse(&t))
         .unwrap_or_default();
     store.fill_defaults();
     migrate(&mut store);
@@ -106,5 +175,36 @@ pub fn save(s: &Store) {
     }
     if let Ok(text) = serde_json::to_string_pretty(s) {
         let _ = std::fs::write(&p, text);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_tolerates_a_utf8_bom() {
+        // BOM + a distinctive setting, so "parsed" and "fell back to Default"
+        // cannot be confused.
+        let text = "\u{feff}{ \"dark\": false, \"glass_transparency_light\": 12.5, \"glass_blur\": 34.0 }";
+        let s = parse(text).expect("a BOM-prefixed store must parse");
+        assert!(!s.dark);
+        assert_eq!(s.glass_transparency_light, 12.5);
+        assert_eq!(s.glass_blur, 34.0);
+        // Absent keys take the shipped defaults, not zero.
+        assert_eq!(s.glass_transparency_dark, 20.0);
+    }
+
+    #[test]
+    fn transparency_defaults_are_20_in_both_themes() {
+        let s = Store::default();
+        assert_eq!(s.transparency(true), 20.0, "dark default tint");
+        assert_eq!(s.transparency(false), 20.0, "light default tint");
+        assert_eq!(s.glass_blur, 100.0);
+    }
+
+    #[test]
+    fn parse_rejects_garbage() {
+        assert!(parse("not json").is_none());
     }
 }
