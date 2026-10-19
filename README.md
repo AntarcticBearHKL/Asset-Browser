@@ -19,7 +19,7 @@ selected assets off to DCC tools.
 
 ## Install (pre-built)
 
-1. Download `AssetBrowser-v0.02-win64.zip` from the
+1. Download `AssetBrowser-v0.03-win64.zip` from the
    [Releases](https://github.com/AntarcticBearHKL/Asset-Browser/releases) page.
 2. Extract anywhere and run `asset-library-desktop.exe`.
 3. Needs a 64-bit Windows 10/11 and the Microsoft Visual C++ 2015-2022 Redistributable
