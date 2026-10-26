@@ -330,6 +330,28 @@ fn rebuild_rows(ui: &AppWindow, a: &App) {
     ))));
 }
 
+/// Chunk the cart into rows of five preview cards.
+fn cart_grid_rows(len: usize) -> Vec<CartGridRow> {
+    let mut rows = Vec::with_capacity(len.div_ceil(5));
+    let mut k = 0usize;
+    while k < len {
+        let n = (len - k).min(5);
+        let slot = |offset: usize| -> i32 {
+            if n > offset { (k + offset) as i32 } else { -1 }
+        };
+        rows.push(CartGridRow {
+            a: slot(0),
+            b: slot(1),
+            c: slot(2),
+            d: slot(3),
+            e: slot(4),
+            n: n as i32,
+        });
+        k += 5;
+    }
+    rows
+}
+
 fn rebuild_cart(ui: &AppWindow, a: &App) {
     let rows: Vec<CartRow> = a
         .state
@@ -346,8 +368,10 @@ fn rebuild_cart(ui: &AppWindow, a: &App) {
             }
         })
         .collect();
+    let grid = cart_grid_rows(rows.len());
     a.cart_model.set_vec(rows);
     ui.set_cart(ModelRc::new(a.cart_model.clone()));
+    ui.set_cart_grid(ModelRc::new(VecModel::from(grid)));
     ui.set_cart_count(a.state.cart.len() as i32);
 }
 

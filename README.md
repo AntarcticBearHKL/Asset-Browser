@@ -129,9 +129,11 @@ themselves when `D:\3D Resource\_Catalog\manifest.json` is absent.
   animation is not applied". The stage draws a floor grid with a soft contact shadow.
   Controls: **right-drag orbits**, **middle-drag pans**, the **wheel zooms**, plus
   play/pause, restart, seek, reset view and **Bones** (a skeleton overlay over the mesh).
-- **Cart** — add / remove / clear / "add all filtered", persisted to
-  `%APPDATA%\asset-library-desktop\store.json` and restored on launch, plus **Export codes**
-  (writes the JSON payload to the clipboard, then clears the cart).
+- **Cart** — a centred preview-only modal (five square cards per row). Clicking a
+  preview opens the same detail panel as the grid; hover a card for its remove button.
+  Add / remove / clear / "add all filtered" and **Export codes** live in the four
+  flat actions at the bottom. The cart persists to
+  `%APPDATA%\asset-library-desktop\store.json` and is restored on launch.
 - **Native file writes** — category/tag edits and deletes write straight to disk
   (folder move + `<slug>.json` + `manifest.json`); no helper server is involved.
 

@@ -1706,3 +1706,12 @@ fn filter_chips_keep_a_stable_order_and_skip_removed_style_filter() {
     assert_eq!(s.matching_label(), "1 matching");
     assert_eq!(s.total_label(), "3 ASSETS");
 }
+
+#[test]
+fn cart_grid_chunks_five_previews_per_row() {
+    let rows = crate::cart_grid_rows(12);
+    assert_eq!(rows.iter().map(|r| r.n).collect::<Vec<_>>(), vec![5, 5, 2]);
+    assert_eq!((rows[0].a, rows[0].e, rows[0].n), (0, 4, 5));
+    assert_eq!((rows[2].a, rows[2].b, rows[2].e, rows[2].n), (10, 11, -1, 2));
+    assert!(crate::cart_grid_rows(0).is_empty());
+}

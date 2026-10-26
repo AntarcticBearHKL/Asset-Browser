@@ -643,76 +643,39 @@ export component Card inherits Rectangle {
     }
 }
 
-export component CartLine inherits Rectangle {
-    in property <string> code: "";
-    in property <string> slug: "";
-    in property <string> category: "";
-    in property <int> idx: 0;
+export component CartTile inherits Rectangle {
     in property <image> thumb;
+    in property <string> code: "";
     callback open();
     callback remove();
-    height: 64px;
-    background: row-ta.has-hover ? Theme.hover : transparent;
-    animate background { duration: 110ms; easing: ease-out; }
-    row-ta := TouchArea {
+
+    // Square preview-only card; the remove control only appears on hover.
+    height: self.width;
+    border-radius: 8px;
+    background: Theme.well;
+    border-width: 1px;
+    border-color: hover.has-hover ? Theme.border-strong : Theme.border;
+    animate border-color { duration: 120ms; easing: ease-out; }
+    clip: true;
+
+    hover := TouchArea {
         mouse-cursor: pointer;
         clicked => { root.open(); }
     }
-    HorizontalLayout {
-        padding-left: 16px;
-        padding-right: 10px;
-        spacing: 12px;
-        Rectangle {
-            width: 44px;
-            height: 44px;
-            border-radius: 7px;
-            background: Theme.well;
-            border-width: 1px;
-            border-color: Theme.border;
-            clip: true;
-            Image {
-                x: 3px;
-                y: 3px;
-                width: parent.width - 6px;
-                height: parent.height - 6px;
-                source: root.thumb;
-                image-fit: contain;
-            }
-        }
-        VerticalLayout {
-            horizontal-stretch: 1;
-            spacing: 3px;
-            alignment: center;
-            Text {
-                text: root.code;
-                font-family: "Cascadia Mono";
-                font-size: 12px;
-                font-weight: 500;
-                color: Theme.text;
-                vertical-alignment: center;
-            }
-            Text {
-                text: root.slug;
-                font-family: "Cascadia Mono";
-                font-size: 10.5px;
-                color: Theme.text-dim;
-                vertical-alignment: center;
-                overflow: elide;
-            }
-            Text {
-                text: root.category;
-                font-family: "Arial";
-                font-size: 10.5px;
-                color: Theme.text-faint;
-                vertical-alignment: center;
-                overflow: elide;
-            }
-        }
-        IconBtn {
-            size: 30px;
-            commands: "M 6 6 L 18 18 M 18 6 L 6 18";
-            danger: true;
-            clicked => { root.remove(); }
-        }
+    Image {
+        x: 6px;
+        y: 6px;
+        width: parent.width - 12px;
+        height: parent.height - 12px;
+        source: root.thumb;
+        image-fit: contain;
+    }
+    if hover.has-hover : IconBtn {
+        x: parent.width - 34px;
+        y: 8px;
+        size: 26px;
+        commands: "M 6 6 L 18 18 M 18 6 L 6 18";
+        danger: true;
+        clicked => { root.remove(); }
     }
 }

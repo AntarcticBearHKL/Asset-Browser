@@ -1,9 +1,9 @@
-import { Theme, AssetItem, GridRow, CartRow, SpecRow, SlideItem, ClipItem } from "theme.slint";
+import { Theme, AssetItem, GridRow, CartRow, CartGridRow, SpecRow, SlideItem, ClipItem } from "theme.slint";
 // Re-exported so main.rs can reach the settings properties through
 // `ui.global::<Theme>()`; an import alone does not put the global in Slint's
 // generated Rust API.
 export { Theme } from "theme.slint";
-import { Plate, HLine, Btn, Icon, IconBtn, Tab, StatusIconBtn, Pick, TagChip, DialogHead, BridgeStatus, DialogField, Card, CartLine, GlassSlider } from "components.slint";
+import { Plate, HLine, Btn, Icon, IconBtn, Tab, StatusIconBtn, Pick, TagChip, DialogHead, BridgeStatus, DialogField, Card, CartTile, GlassSlider } from "components.slint";
 import { ListView, Slider } from "std-widgets.slint";
 
 // ---------------------------------------------------------------------------
@@ -58,6 +58,7 @@ export component AppWindow inherits Window {
     in property <[AssetItem]> items: [];
     in property <[GridRow]>   rows: [];
     in property <[CartRow]>   cart: [];
+    in property <[CartGridRow]> cart-grid: [];
     in property <[SpecRow]>   spec: [];
     in property <[SlideItem]> slides: [];
     in property <[ClipItem]>  clips: [];
@@ -1449,48 +1450,41 @@ export component AppWindow inherits Window {
         }
     }
 
-    // ============ cart drawer ============
+    // ============ cart modal ============
     if root.cart-open : Rectangle {
         width: root.width;
         height: root.height;
         background: Theme.overlay;
         TouchArea { clicked => { root.close-cart(); } }
-        Rectangle {
-            x: root.width - self.width;
-            y: 0px;
-            width: min(440px, root.width);
-            height: root.height;
+
+        cart-sheet := Rectangle {
+            x: (root.width - self.width) / 2;
+            y: (root.height - self.height) / 2;
+            width: min(root.width - 64px, 1180px);
+            height: min(root.height - 64px, 820px);
             background: Theme.surface;
             border-width: 1px;
             border-color: Theme.border-strong;
+            border-radius: 12px;
+            clip: true;
             TouchArea { }
 
-            property <length> foot-h: 214px;
+            // Five square preview cards per row.
+            property <length> tile-w: (self.width - 88px) / 5;
+            property <length> tile-h: self.tile-w;
 
-            // ---- head (fixed) ----
-            Rectangle {
-                x: 0px;
-                y: 0px;
+            VerticalLayout {
                 width: parent.width;
-                height: 78px;
-                background: transparent;
-                VerticalLayout {
-                    padding-left: 20px;
-                    padding-right: 14px;
-                    padding-top: 16px;
-                    padding-bottom: 14px;
-                    spacing: 8px;
-                    Text {
-                        text: "SELECTION";
-                        font-family: "Cascadia Mono";
-                        font-size: 10px;
-                        letter-spacing: 1.4px;
-                        color: Theme.text-faint;
-                        height: 12px;
-                        vertical-alignment: center;
-                    }
+                height: parent.height;
+                spacing: 0px;
+
+                // ---- head ----
+                Rectangle {
+                    height: 66px;
+                    background: transparent;
                     HorizontalLayout {
-                        height: 34px;
+                        padding-left: 20px;
+                        padding-right: 16px;
                         spacing: 10px;
                         Text {
                             text: "CART";
@@ -1498,10 +1492,18 @@ export component AppWindow inherits Window {
                             font-size: 28px;
                             letter-spacing: -0.6px;
                             color: Theme.text;
-                            horizontal-stretch: 1;
                             vertical-alignment: center;
                         }
                         Plate { label: root.cart-count; height: 22px; }
+                        Text {
+                            text: "Click a preview for details";
+                            font-family: "Arial";
+                            font-size: 11px;
+                            color: Theme.text-faint;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+                        Rectangle { horizontal-stretch: 1; }
                         IconBtn {
                             size: 30px;
                             commands: "M 5 5 L 19 19 M 19 5 L 5 19";
@@ -1509,84 +1511,119 @@ export component AppWindow inherits Window {
                         }
                     }
                 }
-            }
-            Rectangle { x: 0px; y: 78px; width: parent.width; height: 1px; background: Theme.divider; }
+                Rectangle { height: 1px; background: Theme.divider; }
 
-            // ---- list (fills the middle) ----
-            Rectangle {
-                x: 0px;
-                y: 79px;
-                width: parent.width;
-                height: parent.height - 79px - parent.foot-h;
-                background: transparent;
-                clip: true;
-                if root.cart.length == 0 : Text {
-                    text: "Cart is empty";
-                    font-family: "Arial";
-                    font-size: 13px;
-                    color: Theme.text-faint;
-                    width: parent.width;
-                    height: 120px;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                }
-                cart-body := Flickable {
-                    width: parent.width;
-                    height: parent.height;
-                    content-width: self.width;
-                    content-height: max(cart-body.height, root.cart.length * 64px);
-                    VerticalLayout {
-                        width: cart-body.width;
-                        for c[i] in root.cart : CartLine {
-                            code: c.code;
-                            slug: c.slug;
-                            category: c.category;
-                            idx: c.idx;
-                            thumb: c.thumb;
-                            open => { root.cart-open-detail(c.code); }
-                            remove => { root.cart-remove(c.code); }
-                            if i < root.cart.length - 1 : Rectangle {
-                                x: 16px;
-                                y: parent.height - 1px;
-                                width: parent.width - 32px;
-                                height: 1px;
-                                background: Theme.divider;
+                // ---- preview grid ----
+                Rectangle {
+                    vertical-stretch: 1;
+                    background: transparent;
+                    clip: true;
+
+                    if root.cart.length == 0 : Text {
+                        text: "Cart is empty";
+                        font-family: "Arial";
+                        font-size: 13px;
+                        color: Theme.text-faint;
+                        width: parent.width;
+                        height: parent.height;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    cart-flick := Flickable {
+                        width: parent.width;
+                        height: parent.height;
+                        content-width: self.width;
+                        content-height: max(cart-flick.height, root.cart-grid.length * (cart-sheet.tile-h + 12px) + 28px);
+                        VerticalLayout {
+                            width: cart-flick.width;
+                            padding-left: 20px;
+                            padding-right: 20px;
+                            padding-top: 20px;
+                            padding-bottom: 20px;
+                            spacing: 12px;
+                            for row in root.cart-grid : HorizontalLayout {
+                                height: cart-sheet.tile-h;
+                                spacing: 12px;
+                                if row.n >= 1 : CartTile {
+                                    width: cart-sheet.tile-w;
+                                    thumb: root.cart[row.a].thumb;
+                                    open => { root.cart-open-detail(root.cart[row.a].code); }
+                                    remove => { root.cart-remove(root.cart[row.a].code); }
+                                }
+                                if row.n >= 2 : CartTile {
+                                    width: cart-sheet.tile-w;
+                                    thumb: root.cart[row.b].thumb;
+                                    open => { root.cart-open-detail(root.cart[row.b].code); }
+                                    remove => { root.cart-remove(root.cart[row.b].code); }
+                                }
+                                if row.n >= 3 : CartTile {
+                                    width: cart-sheet.tile-w;
+                                    thumb: root.cart[row.c].thumb;
+                                    open => { root.cart-open-detail(root.cart[row.c].code); }
+                                    remove => { root.cart-remove(root.cart[row.c].code); }
+                                }
+                                if row.n >= 4 : CartTile {
+                                    width: cart-sheet.tile-w;
+                                    thumb: root.cart[row.d].thumb;
+                                    open => { root.cart-open-detail(root.cart[row.d].code); }
+                                    remove => { root.cart-remove(root.cart[row.d].code); }
+                                }
+                                if row.n >= 5 : CartTile {
+                                    width: cart-sheet.tile-w;
+                                    thumb: root.cart[row.e].thumb;
+                                    open => { root.cart-open-detail(root.cart[row.e].code); }
+                                    remove => { root.cart-remove(root.cart[row.e].code); }
+                                }
                             }
                         }
                     }
                 }
-            }
 
-            // ---- foot (pinned to the bottom) ----
-            Rectangle {
-                x: 0px;
-                y: parent.height - parent.foot-h;
-                width: parent.width;
-                height: parent.foot-h;
-                background: Theme.surface;
-                Rectangle { x: 0px; y: 0px; width: parent.width; height: 1px; background: Theme.divider; }
-                VerticalLayout {
-                    padding-left: 20px;
-                    padding-right: 20px;
-                    padding-top: 16px;
-                    padding-bottom: 18px;
-                    spacing: 10px;
-                    Btn {
-                        label: "Export codes";
-                        primary: true;
-                        height: 42px;
-                        font-size: 14px;
-                        enabled: root.cart-count > 0;
-                        clicked => { root.cart-export(); }
+                Rectangle { height: 1px; background: Theme.divider; }
+
+                // ---- four actions, flat ----
+                Rectangle {
+                    height: 78px;
+                    background: Theme.surface;
+                    HorizontalLayout {
+                        width: parent.width;
+                        height: parent.height;
+                        padding-left: 20px;
+                        padding-right: 20px;
+                        padding-top: 16px;
+                        padding-bottom: 16px;
+                        spacing: 10px;
+                        Btn {
+                            label: "Export codes";
+                            primary: true;
+                            height: 42px;
+                            horizontal-stretch: 1;
+                            enabled: root.cart-count > 0;
+                            clicked => { root.cart-export(); }
+                        }
+                        Btn {
+                            label: "Add all filtered";
+                            height: 42px;
+                            horizontal-stretch: 1;
+                            clicked => { root.cart-select-all-filtered(); }
+                        }
+                        Btn {
+                            label: "AI tags (DeepSeek)";
+                            height: 42px;
+                            horizontal-stretch: 1;
+                            enabled: root.cart-count > 0 && !root.ai-busy;
+                            clicked => { root.cart-ai-tag(); }
+                        }
+                        Btn {
+                            label: "Clear";
+                            danger: true;
+                            height: 42px;
+                            horizontal-stretch: 1;
+                            enabled: root.cart-count > 0;
+                            clicked => { root.cart-clear(); }
+                        }
                     }
-                    Btn { label: "Add all filtered"; height: 36px; clicked => { root.cart-select-all-filtered(); } }
-                    Btn {
-                        label: "AI tags (DeepSeek)";
-                        height: 36px;
-                        enabled: root.cart-count > 0 && !root.ai-busy;
-                        clicked => { root.cart-ai-tag(); }
-                    }
-                    Btn { label: "Clear"; danger: true; height: 36px; enabled: root.cart-count > 0; clicked => { root.cart-clear(); } }
                 }
             }
         }
