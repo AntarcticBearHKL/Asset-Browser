@@ -79,7 +79,6 @@ pub struct AppState {
     pub l1: String,
     pub l2: String,
     pub tag: String,
-    pub style_textured_only: bool,
     pub sort: SortKey,
     /// Current 0-based page of the filtered list.
     pub page: usize,
@@ -104,7 +103,6 @@ impl AppState {
             l1: String::new(),
             l2: String::new(),
             tag: String::new(),
-            style_textured_only: false,
             sort: SortKey::Code,
             page: 0,
             page_size: 12,
@@ -174,9 +172,6 @@ impl AppState {
                 continue;
             }
             if !self.tag.is_empty() && !it.has_tag(&self.tag) {
-                continue;
-            }
-            if self.style_textured_only && it.untextured {
                 continue;
             }
             out.push(i);
@@ -339,7 +334,6 @@ impl AppState {
         self.l1.clear();
         self.l2.clear();
         self.tag.clear();
-        self.style_textured_only = false;
         self.clear_random();
         self.page = 0;
         self.clamp_page();
@@ -350,23 +344,43 @@ impl AppState {
             || !self.l1.is_empty()
             || !self.l2.is_empty()
             || !self.tag.is_empty()
-            || self.style_textured_only
     }
 
-    /// e.g. `"1,913 ASSETS"` or `"1,913 ASSETS · 42 matching"`.
-    pub fn count_label(&self) -> String {
-        let total = self.kind_count(self.tab);
-        let shown = self.filtered().len() as i64;
-        if shown == total {
-            format!("{} {}", format_int(total), self.tab.noun())
-        } else {
-            format!(
-                "{} {} · {} matching",
-                format_int(total),
-                self.tab.noun(),
-                format_int(shown)
-            )
+    pub fn filtered_len(&self) -> usize {
+        self.filtered().len()
+    }
+
+    /// Labels for the chips in the second toolbar row, in a stable order:
+    /// search, category, subcategory, tag. The style/texture-only filter was
+    /// removed, so it is not part of this list.
+    pub fn filter_labels(&self) -> Vec<String> {
+        let mut labels = Vec::new();
+        if !self.q.trim().is_empty() {
+            labels.push(format!("search: {}", self.q));
         }
+        if !self.l1.is_empty() {
+            labels.push(format!("category: {}", self.l1));
+        }
+        if !self.l2.is_empty() {
+            labels.push(format!("sub: {}", self.l2));
+        }
+        if !self.tag.is_empty() {
+            labels.push(format!("#{}", self.tag));
+        }
+        labels
+    }
+
+    /// Right-aligned second-row counts: matching first, library total last.
+    pub fn matching_label(&self) -> String {
+        format!("{} matching", format_int(self.filtered_len() as i64))
+    }
+
+    pub fn total_label(&self) -> String {
+        format!(
+            "{} {}",
+            format_int(self.kind_count(self.tab)),
+            self.tab.noun()
+        )
     }
 
     /// Set the sort from a `sort_options()` index, downgrading triangle sorts on
@@ -465,10 +479,6 @@ pub fn sort_options() -> Vec<String> {
         "Triangles ↑".to_string(),
         "Triangles ↓".to_string(),
     ]
-}
-
-pub fn style_options() -> Vec<String> {
-    vec!["All".to_string(), "Textured only".to_string()]
 }
 
 pub fn page_size_options() -> Vec<i32> {

@@ -34,7 +34,7 @@ use slint::{ComponentHandle, Model, ModelRc, Timer, TimerMode, VecModel, Weak};
 use bridge::Dot;
 use library::Library;
 use model::{preview_badge, slide_label, spec_pairs, Dims, Item, Kind};
-use state::{build_taxonomy, column_options, page_size_options, sort_options, style_options, AppState};
+use state::{build_taxonomy, column_options, page_size_options, sort_options, AppState};
 
 /// Asset library root (fixed data source, see PORT_SPEC §1.4).
 pub const ROOT: &str = r"D:\3D Resource";
@@ -352,7 +352,9 @@ fn rebuild_cart(ui: &AppWindow, a: &App) {
 }
 
 fn sync_view(ui: &AppWindow, a: &App) {
-    ui.set_count_label(a.state.count_label().into());
+    ui.set_active_filters(to_string_model(&a.state.filter_labels()));
+    ui.set_matching_label(a.state.matching_label().into());
+    ui.set_total_label(a.state.total_label().into());
     ui.set_filters_active(a.state.filters_active());
     ui.set_page(a.state.page as i32);
     ui.set_page_count(a.state.page_count() as i32);
@@ -404,7 +406,6 @@ fn sync_all(ui: &AppWindow, a: &App) {
     ui.set_l1_index(l1_index);
     ui.set_l2_index(l2_index);
     ui.set_sort_options(to_string_model(&sort_options()));
-    ui.set_style_options(to_string_model(&style_options()));
     ui.set_page_sizes(to_int_model(&page_size_options()));
     ui.set_page_size_labels(to_string_model(
         &page_size_options().iter().map(|n| n.to_string()).collect::<Vec<_>>(),
@@ -414,7 +415,6 @@ fn sync_all(ui: &AppWindow, a: &App) {
         &column_options().iter().map(|n| n.to_string()).collect::<Vec<_>>(),
     ));
     ui.set_sort_index(a.state.sort.index());
-    ui.set_style_index(if a.state.style_textured_only { 1 } else { 0 });
 
     sync_view(ui, a);
     rebuild_cart(ui, a);
@@ -2397,7 +2397,6 @@ fn main() -> Result<(), slint::PlatformError> {
     ui.set_clips(ModelRc::new(VecModel::from(Vec::<ClipItem>::new())));
     ui.set_spec(ModelRc::new(VecModel::from(Vec::<SpecRow>::new())));
     ui.set_sort_options(to_string_model(&sort_options()));
-    ui.set_style_options(to_string_model(&style_options()));
     ui.set_l1_options(empty_string_model());
     ui.set_l2_options(empty_string_model());
     ui.set_edit_l1_options(empty_string_model());
@@ -2625,21 +2624,6 @@ fn wire_callbacks(ui: &AppWindow, app_rc: &Rc<RefCell<App>>, drag: &Rc<WindowDra
                 a.state.set_sort_index(index);
                 if let Some(u) = weak.upgrade() {
                     u.set_sort_index(a.state.sort.index());
-                    sync_view(&u, &a);
-                }
-            }
-        });
-    }
-    {
-        let app_rc = app_rc.clone();
-        let weak = ui.as_weak();
-        ui.on_select_style(move |index| {
-            if let Ok(mut a) = app_rc.try_borrow_mut() {
-                a.state.style_textured_only = index == 1;
-                a.state.clear_random();
-                a.state.clamp_page();
-                if let Some(u) = weak.upgrade() {
-                    u.set_style_index(index);
                     sync_view(&u, &a);
                 }
             }

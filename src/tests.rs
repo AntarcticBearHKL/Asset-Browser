@@ -10,7 +10,7 @@ use crate::model::{
     Item, Kind,
 };
 use crate::state::{
-    build_taxonomy, column_options, page_size_options, sort_options, style_options, AppState,
+    build_taxonomy, column_options, page_size_options, sort_options, AppState,
     SortKey, Taxonomy,
 };
 
@@ -167,7 +167,8 @@ fn kind_counts_and_default_view() {
     assert_eq!(s.kind_count(Kind::Rig), 1);
     assert!(!s.filters_active());
     assert_eq!(s.filtered().len(), 3);
-    assert_eq!(s.count_label(), "3 ASSETS");
+    assert_eq!(s.total_label(), "3 ASSETS");
+    assert_eq!(s.matching_label(), "3 matching");
 }
 
 #[test]
@@ -177,9 +178,9 @@ fn switching_tab_resets_filters_and_reports_its_own_counts() {
     s.l2 = "Beam".into();
     s.set_tab(Kind::Rig);
     assert!(s.l1.is_empty() && s.l2.is_empty());
-    assert_eq!(s.count_label(), "1 RIGS");
+    assert_eq!(s.total_label(), "1 RIGS");
     s.set_tab(Kind::Material);
-    assert_eq!(s.count_label(), "1 TEXTURES");
+    assert_eq!(s.total_label(), "1 TEXTURES");
 }
 
 #[test]
@@ -207,13 +208,14 @@ fn search_covers_code_slug_original_name_and_tags() {
 }
 
 #[test]
-fn filters_compose_and_count_label_shows_matches() {
+fn filters_compose_and_counts_show_matches() {
     let mut s = sample();
     s.l1 = "Architecture".into();
     assert_eq!(s.filtered().len(), 2);
     s.l2 = "Beam".into();
     assert_eq!(s.filtered().len(), 1);
-    assert_eq!(s.count_label(), "3 ASSETS · 1 matching");
+    assert_eq!(s.total_label(), "3 ASSETS");
+    assert_eq!(s.matching_label(), "1 matching");
     s.l2.clear();
     s.tag = "stone".into();
     assert_eq!(s.filtered().len(), 1);
@@ -294,7 +296,6 @@ fn taxonomy_prefers_json_then_derives_missing_kinds() {
 #[test]
 fn dropdown_models_match_the_web() {
     assert_eq!(sort_options(), vec!["Code", "Slug", "Triangles ↑", "Triangles ↓"]);
-    assert_eq!(style_options(), vec!["All", "Textured only"]);
 }
 
 /* -------------------------- state.rs: pagination ------------------------ */
@@ -1688,3 +1689,18 @@ fn blender_preflight_rejects_ascii_fbx_before_clearing_the_scene() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+
+#[test]
+fn filter_chips_keep_a_stable_order_and_skip_removed_style_filter() {
+    let mut s = sample();
+    s.q = "beam".into();
+    s.l1 = "Architecture".into();
+    s.l2 = "Beam".into();
+    s.tag = "wood".into();
+    assert_eq!(
+        s.filter_labels(),
+        vec!["search: beam", "category: Architecture", "sub: Beam", "#wood"]
+    );
+    assert_eq!(s.matching_label(), "1 matching");
+    assert_eq!(s.total_label(), "3 ASSETS");
+}

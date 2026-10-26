@@ -68,17 +68,17 @@ export component AppWindow inherits Window {
     in-out property <int>    tab: 0;
     property <length>        card-w: max(120px, (root.width - 32px - (root.columns - 1) * 12px) / root.columns);
     property <length>        card-h: root.card-w + 108px;
-    in-out property <string> count-label: "";
     in-out property <string> query: "";
     in property <[string]>   l1-options: [];
     in property <[string]>   l2-options: [];
     in property <[string]>   sort-options: [];
-    in property <[string]>   style-options: [];
     in-out property <int>    l1-index: -1;
     in-out property <int>    l2-index: -1;
     in-out property <int>    sort-index: 0;
-    in-out property <int>    style-index: 0;
     in property <bool>       filters-active: false;
+    in property <[string]>   active-filters: [];
+    in property <string>     matching-label: "";
+    in property <string>     total-label: "";
     in-out property <string> status-text: "";
     in-out property <bool>   busy: false;
 
@@ -99,11 +99,10 @@ export component AppWindow inherits Window {
     in-out property <bool>   page-edit-open: false;
     in-out property <string> page-edit-text: "";
 
-    in-out property <int> pick-open: -1; // 0 l1, 1 l2, 2 sort, 3 style, 4 edit-l1, 5 edit-l2, 6 page-size, 7 columns
+    in-out property <int> pick-open: -1; // 0 l1, 1 l2, 2 sort, 3 unused, 4 edit-l1, 5 edit-l2, 6 page-size, 7 columns
     property <string> l1-value: root.l1-options.length > 0 && root.l1-index >= 0 && root.l1-index < root.l1-options.length ? root.l1-options[root.l1-index] : "All categories";
     property <string> l2-value: root.l2-options.length > 0 && root.l2-index >= 0 && root.l2-index < root.l2-options.length ? root.l2-options[root.l2-index] : "All subcategories";
     property <string> sort-value: root.sort-index >= 0 && root.sort-index < root.sort-options.length ? root.sort-options[root.sort-index] : "";
-    property <string> style-value: root.style-index >= 0 && root.style-index < root.style-options.length ? root.style-options[root.style-index] : "";
 
     in-out property <string> blender-state: "checking";
     in-out property <string> unity-state: "checking";
@@ -167,7 +166,6 @@ export component AppWindow inherits Window {
         if root.pick-open == 0 { root.select-l1(i); }
         else if root.pick-open == 1 { root.select-l2(i); }
         else if root.pick-open == 2 { root.select-sort(i); }
-        else if root.pick-open == 3 { root.select-style(i); }
         else if root.pick-open == 4 { root.detail-set-l1(i); }
         else if root.pick-open == 5 { root.detail-set-l2(i); }
         else if root.pick-open == 6 { root.set-page-size(root.page-sizes[i]); }
@@ -195,7 +193,6 @@ export component AppWindow inherits Window {
     callback select-l1(int);
     callback select-l2(int);
     callback select-sort(int);
-    callback select-style(int);
     callback clear-filters();
     callback page-first();
     callback page-prev();
@@ -414,14 +411,14 @@ export component AppWindow inherits Window {
                     state: root.painter-state;
                     clicked => { root.painter-open-dialog(); }
                 }
-                Rectangle { width: 1px; height: 24px; background: Theme.divider; }
+                Rectangle { width: 1px; height: 24px; background: Theme.border-strong; }
                 IconBtn {
                     commands: "M 3 3.5 L 5.3 3.5 L 7.7 15.6 L 17.6 15.6 L 19.5 8 L 6.1 8";
                     tint: root.cart-open ? Theme.accent : Theme.text-dim;
                     active: root.cart-open;
                     clicked => { root.cart-open ? root.close-cart() : root.open-cart(); }
                 }
-                Rectangle { width: 1px; height: 24px; background: Theme.divider; }
+                Rectangle { width: 1px; height: 24px; background: Theme.border-strong; }
                 IconBtn { commands: "M 5 12 L 19 12"; clicked => { root.win-minimize(); } }
                 IconBtn { commands: "M 5 5 L 19 19 M 19 5 L 5 19"; danger: true; clicked => { root.win-close(); } }
             }
@@ -442,9 +439,28 @@ export component AppWindow inherits Window {
                 padding-bottom: 12px;
                 spacing: 8px;
 
+                IconBtn {
+                    size: 34px;
+                    framed: true;
+                    commands: "M 4 4 L 20 4 L 20 20 L 4 20 Z M 8 8 L 8.5 8 M 15.5 8 L 16 8 M 12 12 L 12.5 12 M 8 16 L 8.5 16 M 15.5 16 L 16 16";
+                    active: root.random-active;
+                    clicked => { root.shuffle(); }
+                }
+
+                l1-pick := Pick { width: 150px; value: root.l1-value; open: root.pick-open == 0; clicked => { root.pick-open = root.pick-open == 0 ? -1 : 0; } }
+                l2-pick := Pick { width: 150px; value: root.l2-value; enabled: root.l1-index >= 0; open: root.pick-open == 1; clicked => { root.pick-open = root.pick-open == 1 ? -1 : 1; } }
+                sort-pick := Pick { width: 130px; value: root.sort-value; open: root.pick-open == 2; clicked => { root.pick-open = root.pick-open == 2 ? -1 : 2; } }
+
+                Rectangle { width: 1px; height: 24px; background: Theme.border-strong; }
+
+                pagesize-pick := Pick { width: 120px; value: "\{root.page-size} / page"; open: root.pick-open == 6; clicked => { root.pick-open = root.pick-open == 6 ? -1 : 6; } }
+                columns-pick := Pick { width: 104px; value: "\{root.columns} / row"; open: root.pick-open == 7; clicked => { root.pick-open = root.pick-open == 7 ? -1 : 7; } }
+
+                Rectangle { width: 1px; height: 24px; background: Theme.border-strong; }
+
                 search := Rectangle {
                     min-width: 200px;
-                    max-width: 420px;
+                    max-width: 640px;
                     horizontal-stretch: 1;
                     height: 34px;
                     background: Theme.surface-2;
@@ -499,45 +515,12 @@ export component AppWindow inherits Window {
                     }
                 }
 
-                IconBtn {
-                    size: 34px;
-                    framed: true;
-                    commands: "M 4 4 L 20 4 L 20 20 L 4 20 Z M 8 8 L 8.5 8 M 15.5 8 L 16 8 M 12 12 L 12.5 12 M 8 16 L 8.5 16 M 15.5 16 L 16 16";
-                    active: root.random-active;
-                    clicked => { root.shuffle(); }
-                }
-
-                l1-pick := Pick { width: 150px; value: root.l1-value; open: root.pick-open == 0; clicked => { root.pick-open = root.pick-open == 0 ? -1 : 0; } }
-                l2-pick := Pick { width: 150px; value: root.l2-value; enabled: root.l1-index >= 0; open: root.pick-open == 1; clicked => { root.pick-open = root.pick-open == 1 ? -1 : 1; } }
-                sort-pick := Pick { width: 130px; value: root.sort-value; open: root.pick-open == 2; clicked => { root.pick-open = root.pick-open == 2 ? -1 : 2; } }
-                style-pick := Pick { width: 130px; value: root.style-value; open: root.pick-open == 3; clicked => { root.pick-open = root.pick-open == 3 ? -1 : 3; } }
-
-                Btn {
-                    label: "Refresh";
-                    width: 88px;
-                    height: 34px;
-                    enabled: !root.busy;
-                    clicked => { root.refresh-all(); }
-                }
-                pagesize-pick := Pick { width: 120px; value: "\{root.page-size} / page"; open: root.pick-open == 6; clicked => { root.pick-open = root.pick-open == 6 ? -1 : 6; } }
-                columns-pick := Pick { width: 104px; value: "\{root.columns} / row"; open: root.pick-open == 7; clicked => { root.pick-open = root.pick-open == 7 ? -1 : 7; } }
-                Rectangle { horizontal-stretch: 1; }
-                Text {
-                    text: root.count-label;
-                    font-family: "Cascadia Mono";
-                    font-size: 11px;
-                    letter-spacing: 0.9px;
-                    color: Theme.text-faint;
-                    vertical-alignment: center;
-                    horizontal-alignment: right;
-                    overflow: elide;
-                }
             }
         }
 
-        // ============ filter chips ============
-        if root.filters-active : Rectangle {
-            height: 40px;
+        // ============ filters / counts ============
+        filtersbar := Rectangle {
+            height: 44px;
             // transparent: see header — the root window supplies window-bg once.
             background: transparent;
             Rectangle { y: parent.height - 1px; height: 1px; width: parent.width; background: Theme.divider; }
@@ -546,19 +529,65 @@ export component AppWindow inherits Window {
                 height: parent.height;
                 padding-left: 16px;
                 padding-right: 16px;
-                padding-top: 7px;
-                padding-bottom: 7px;
+                padding-top: 8px;
+                padding-bottom: 8px;
                 spacing: 8px;
-                alignment: start;
+
                 Text {
-                    text: "ACTIVE FILTERS";
+                    text: "FILTERS";
                     font-family: "Cascadia Mono";
                     font-size: 10px;
                     letter-spacing: 1px;
                     color: Theme.text-faint;
                     vertical-alignment: center;
                 }
-                Btn { label: "Clear filters"; height: 26px; font-size: 11px; mono: true; clicked => { root.clear-filters(); } }
+                if root.active-filters.length == 0 : Text {
+                    text: "none";
+                    font-family: "Arial";
+                    font-size: 12px;
+                    color: Theme.text-faint;
+                    vertical-alignment: center;
+                }
+                for f[i] in root.active-filters : TagChip {
+                    label: f;
+                    height: 24px;
+                }
+                if root.filters-active : Btn {
+                    label: "Clear filters";
+                    height: 26px;
+                    font-size: 11px;
+                    mono: true;
+                    clicked => { root.clear-filters(); }
+                }
+
+                Rectangle { horizontal-stretch: 1; }
+
+                Btn {
+                    label: "Refresh";
+                    width: 82px;
+                    height: 28px;
+                    font-size: 11px;
+                    mono: true;
+                    enabled: !root.busy;
+                    clicked => { root.refresh-all(); }
+                }
+                Text {
+                    text: root.matching-label;
+                    font-family: "Cascadia Mono";
+                    font-size: 11px;
+                    letter-spacing: 0.9px;
+                    color: Theme.text-faint;
+                    vertical-alignment: center;
+                }
+                Rectangle { width: 1px; height: 16px; background: Theme.divider; }
+                Text {
+                    text: root.total-label;
+                    font-family: "Cascadia Mono";
+                    font-size: 11px;
+                    letter-spacing: 0.9px;
+                    color: Theme.text-dim;
+                    vertical-alignment: center;
+                }
             }
         }
 
@@ -703,23 +732,27 @@ export component AppWindow inherits Window {
                     height: parent.height;
                     alignment: center;
                     spacing: 10px;
-                    Rectangle {
-                        width: 56px;
-                        height: 56px;
-                        background: Theme.surface-2;
-                        border-width: 1px;
-                        border-color: Theme.border;
-                        border-radius: 10px;
-                        Path {
-                            x: 16px; y: 16px; width: 24px; height: 24px;
-                            fill: transparent;
-                            stroke: Theme.text-faint;
-                            stroke-width: 1.7px;
-                            viewbox-width: 24;
-                            viewbox-height: 24;
-                            commands: root.filters-active
-                                ? "M 4 6 L 20 6 M 7.5 12 L 16.5 12 M 10.5 18 L 13.5 18"
-                                : "M 3 7 L 3 17 L 21 17 L 21 7 L 11.3 7 L 9.3 5 L 5 5 L 3 7 Z";
+                    HorizontalLayout {
+                        horizontal-stretch: 1;
+                        alignment: center;
+                        Rectangle {
+                            width: 56px;
+                            height: 56px;
+                            background: Theme.surface-2;
+                            border-width: 1px;
+                            border-color: Theme.border;
+                            border-radius: 10px;
+                            Path {
+                                x: 16px; y: 16px; width: 24px; height: 24px;
+                                fill: transparent;
+                                stroke: Theme.text-faint;
+                                stroke-width: 1.7px;
+                                viewbox-width: 24;
+                                viewbox-height: 24;
+                                commands: root.filters-active
+                                    ? "M 4 6 L 20 6 M 7.5 12 L 16.5 12 M 10.5 18 L 13.5 18"
+                                    : "M 3 7 L 3 17 L 21 17 L 21 7 L 11.3 7 L 9.3 5 L 5 5 L 3 7 Z";
+                            }
                         }
                     }
                     Text {
@@ -738,12 +771,6 @@ export component AppWindow inherits Window {
                         horizontal-alignment: center;
                         vertical-alignment: center;
                         overflow: elide;
-                    }
-                    if root.filters-active : Btn {
-                        label: "Clear filters";
-                        width: 140px;
-                        height: 32px;
-                        clicked => { root.clear-filters(); }
                     }
                 }
             }
@@ -1768,8 +1795,8 @@ export component AppWindow inherits Window {
         }
     }
     // ============ pick popup (above the grid) ============
-    // ============ toolbar pick popup (0..3) ============
-    if (root.pick-open >= 0 && root.pick-open <= 3) || root.pick-open == 6 || root.pick-open == 7 : Rectangle {
+    // ============ toolbar pick popup ============
+    if (root.pick-open == 0 || root.pick-open == 1 || root.pick-open == 2) || root.pick-open == 6 || root.pick-open == 7 : Rectangle {
         width: root.width;
         height: root.height;
         background: transparent;
@@ -1778,23 +1805,20 @@ export component AppWindow inherits Window {
             x: root.pick-open == 0 ? l1-pick.absolute-position.x
              : root.pick-open == 1 ? l2-pick.absolute-position.x
              : root.pick-open == 2 ? sort-pick.absolute-position.x
-             : root.pick-open == 3 ? style-pick.absolute-position.x
              : root.pick-open == 6 ? pagesize-pick.absolute-position.x
              : columns-pick.absolute-position.x;
             y: (root.pick-open == 0 ? l1-pick.absolute-position.y
               : root.pick-open == 1 ? l2-pick.absolute-position.y
               : root.pick-open == 2 ? sort-pick.absolute-position.y
-              : root.pick-open == 3 ? style-pick.absolute-position.y
               : root.pick-open == 6 ? pagesize-pick.absolute-position.y
               : columns-pick.absolute-position.y) + 38px;
-            width: (root.pick-open == 2 || root.pick-open == 3) ? 130px
+            width: root.pick-open == 2 ? 130px
                  : root.pick-open == 6 ? 120px
                  : root.pick-open == 7 ? 104px
                  : 150px;
             height: ((root.pick-open == 0 ? root.l1-options.length
                     : root.pick-open == 1 ? root.l2-options.length
                     : root.pick-open == 2 ? root.sort-options.length
-                    : root.pick-open == 3 ? root.style-options.length
                     : root.pick-open == 6 ? root.page-sizes.length
                     : root.column-options.length) * 32px) + 8px;
             background: Theme.surface;
@@ -1810,7 +1834,6 @@ export component AppWindow inherits Window {
                 for o[i] in (root.pick-open == 0 ? root.l1-options
                            : root.pick-open == 1 ? root.l2-options
                            : root.pick-open == 2 ? root.sort-options
-                           : root.pick-open == 3 ? root.style-options
                            : root.pick-open == 6 ? root.page-size-labels
                            : root.column-labels) : Rectangle {
                     height: 32px;

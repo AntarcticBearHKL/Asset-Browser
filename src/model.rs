@@ -131,7 +131,7 @@ impl Kind {
         }
     }
 
-    /// Count-label noun (uppercase), see `AppState::count_label`.
+    /// Count-label noun (uppercase), see `AppState::total_label`.
     pub fn noun(self) -> &'static str {
         match self {
             Kind::Model => "ASSETS",

@@ -110,8 +110,8 @@ themselves when `D:\3D Resource\_Catalog\manifest.json` is absent.
   Each card has a square thumbnail well, a code plate, path-drawn action icons, the slug and
   a strip of uppercase mono tag chips.
 - **Filters** — L1 + L2 category dropdowns (`All …` per level), sort (code / slug /
-  triangles ↑↓), "textured only", tag filtering by clicking a card tag, and an
-  active-filter chip row with clear.
+  triangles ↑↓), tag filtering by clicking a card tag, and a second toolbar row
+  with the active-filter chips, matching count and library total.
 - **Card actions** — add to cart, copy the asset JSON, and hand off per kind: models/rigs →
   Blender + Unity, materials → Substance Painter + Unity.
 - **Detail panel** — large preview with a texture filmstrip (centred tiles), full spec rows,
