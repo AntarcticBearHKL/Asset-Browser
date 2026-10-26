@@ -3,7 +3,7 @@ import { Theme, AssetItem, GridRow, CartRow, CartGridRow, SpecRow, SlideItem, Cl
 // `ui.global::<Theme>()`; an import alone does not put the global in Slint's
 // generated Rust API.
 export { Theme } from "theme.slint";
-import { Plate, HLine, Btn, Icon, IconBtn, Tab, StatusIconBtn, Pick, TagChip, DialogHead, BridgeStatus, DialogField, Card, CartTile, GlassSlider } from "components.slint";
+import { Plate, HLine, Btn, Icon, IconBtn, Tab, StatusIconBtn, Pick, TagChip, DialogHead, BridgeStatus, DialogField, Card, CartTile, GlassSlider, ModalScrim, ModalSurface } from "components.slint";
 import { ListView, Slider } from "std-widgets.slint";
 
 // ---------------------------------------------------------------------------
@@ -172,6 +172,18 @@ export component AppWindow inherits Window {
         else if root.pick-open == 6 { root.set-page-size(root.page-sizes[i]); }
         else if root.pick-open == 7 { root.set-columns(root.column-options[i]); }
         root.pick-open = -1;
+    }
+    function close-panel() {
+        // Detail sits above the cart when it was opened from it; close the
+        // top-most panel first so the cart is revealed again.
+        if root.detail-open { root.close-detail(); return; }
+        if root.cart-open { root.close-cart(); return; }
+        if root.blender-open { root.blender-close(); return; }
+        if root.unity-open { root.unity-close(); return; }
+        if root.painter-open { root.painter-close(); return; }
+        if root.settings-open { root.settings-open = false; return; }
+        if root.pick-open >= 0 { root.pick-open = -1; return; }
+        if root.page-edit-open { root.page-edit-open = false; return; }
     }
     function stage-active() -> bool { return root.detail-kind == "rig"; }
     function empty-title() -> string {
@@ -890,7 +902,7 @@ export component AppWindow inherits Window {
         width: root.width;
         height: root.height;
         background: Theme.overlay;
-        TouchArea { clicked => { root.close-detail(); } }
+        ModalScrim { dismissed => { root.close-panel(); } }
         sheet := Rectangle {
             x: (root.width - self.width) / 2;
             y: (root.height - self.height) / 2;
@@ -901,7 +913,7 @@ export component AppWindow inherits Window {
             border-color: Theme.border-strong;
             border-radius: 12px;
             clip: true;
-            TouchArea { }
+            ModalSurface { dismissed => { root.close-panel(); } }
 
             HorizontalLayout {
                 width: parent.width;
@@ -1405,7 +1417,7 @@ export component AppWindow inherits Window {
                 width: parent.width;
                 height: parent.height;
                 background: transparent;
-                TouchArea { clicked => { root.pick-open = -1; } }
+                ModalScrim { dismissed => { root.close-panel(); } }
                 Rectangle {
                     x: (root.pick-open == 4 ? l1-edit.absolute-position.x : l2-edit.absolute-position.x) - sheet.absolute-position.x;
                     y: (root.pick-open == 4 ? l1-edit.absolute-position.y : l2-edit.absolute-position.y) - sheet.absolute-position.y + 38px;
@@ -1455,7 +1467,11 @@ export component AppWindow inherits Window {
         width: root.width;
         height: root.height;
         background: Theme.overlay;
-        TouchArea { clicked => { root.close-cart(); } }
+        // Opening a detail from the cart keeps the cart alive underneath; hide
+        // it rather than destroying it so closing the detail returns to the
+        // same cart, at the same scroll position.
+        visible: !root.detail-open;
+        ModalScrim { dismissed => { root.close-panel(); } }
 
         cart-sheet := Rectangle {
             x: (root.width - self.width) / 2;
@@ -1467,7 +1483,7 @@ export component AppWindow inherits Window {
             border-color: Theme.border-strong;
             border-radius: 12px;
             clip: true;
-            TouchArea { }
+            ModalSurface { dismissed => { root.close-panel(); } }
 
             // Five square preview cards per row.
             property <length> tile-w: (self.width - 88px) / 5;
@@ -1635,7 +1651,7 @@ export component AppWindow inherits Window {
         width: root.width;
         height: root.height;
         background: Theme.overlay;
-        TouchArea { clicked => { root.blender-close(); } }
+        ModalScrim { dismissed => { root.close-panel(); } }
         Rectangle {
             x: (root.width - self.width) / 2;
             y: (root.height - self.height) / 2;
@@ -1646,7 +1662,7 @@ export component AppWindow inherits Window {
             border-color: Theme.border-strong;
             border-radius: 12px;
             clip: true;
-            TouchArea { }
+            ModalSurface { dismissed => { root.close-panel(); } }
             VerticalLayout {
                 width: parent.width;
                 height: parent.height;
@@ -1692,7 +1708,7 @@ export component AppWindow inherits Window {
         width: root.width;
         height: root.height;
         background: Theme.overlay;
-        TouchArea { clicked => { root.unity-close(); } }
+        ModalScrim { dismissed => { root.close-panel(); } }
         Rectangle {
             x: (root.width - self.width) / 2;
             y: (root.height - self.height) / 2;
@@ -1703,7 +1719,7 @@ export component AppWindow inherits Window {
             border-color: Theme.border-strong;
             border-radius: 12px;
             clip: true;
-            TouchArea { }
+            ModalSurface { dismissed => { root.close-panel(); } }
             VerticalLayout {
                 width: parent.width;
                 height: parent.height;
@@ -1749,7 +1765,7 @@ export component AppWindow inherits Window {
         width: root.width;
         height: root.height;
         background: Theme.overlay;
-        TouchArea { clicked => { root.painter-close(); } }
+        ModalScrim { dismissed => { root.close-panel(); } }
         Rectangle {
             x: (root.width - self.width) / 2;
             y: (root.height - self.height) / 2;
@@ -1760,7 +1776,7 @@ export component AppWindow inherits Window {
             border-color: Theme.border-strong;
             border-radius: 12px;
             clip: true;
-            TouchArea { }
+            ModalSurface { dismissed => { root.close-panel(); } }
             VerticalLayout {
                 width: parent.width;
                 height: parent.height;
@@ -1837,7 +1853,7 @@ export component AppWindow inherits Window {
         width: root.width;
         height: root.height;
         background: transparent;
-        TouchArea { clicked => { root.pick-open = -1; } }
+        ModalScrim { dismissed => { root.close-panel(); } }
         Rectangle {
             x: root.pick-open == 0 ? l1-pick.absolute-position.x
              : root.pick-open == 1 ? l2-pick.absolute-position.x
@@ -1905,7 +1921,7 @@ export component AppWindow inherits Window {
         width: root.width;
         height: root.height;
         background: Theme.overlay;
-        TouchArea { clicked => { root.settings-open = false; } }
+        ModalScrim { dismissed => { root.close-panel(); } }
         settings-sheet := Rectangle {
             x: (root.width - self.width) / 2;
             y: (root.height - self.height) / 2;
@@ -1916,7 +1932,7 @@ export component AppWindow inherits Window {
             border-color: Theme.border-strong;
             border-radius: 12px;
             clip: true;
-            TouchArea { }
+            ModalSurface { dismissed => { root.close-panel(); } }
             VerticalLayout {
                 padding: 20px;
                 spacing: 14px;

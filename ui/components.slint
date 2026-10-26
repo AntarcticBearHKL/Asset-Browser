@@ -679,3 +679,37 @@ export component CartTile inherits Rectangle {
         clicked => { root.remove(); }
     }
 }
+
+
+// Full-window dismiss layer: left-click (on release) or right-click closes the
+// panel above it. Declared before the panel so the panel sits on top.
+export component ModalScrim inherits TouchArea {
+    callback dismissed();
+    width: 100%;
+    height: 100%;
+    pointer-event(event) => {
+        if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
+            root.dismissed();
+            return EventResult.accept;
+        }
+        if (event.kind == PointerEventKind.up && event.button == PointerEventButton.left) {
+            root.dismissed();
+            return EventResult.accept;
+        }
+        return EventResult.accept;
+    }
+}
+
+// Click barrier inside a panel. It swallows clicks and closes the panel on a
+// right-click, so a right-click anywhere on the sheet dismisses it too.
+export component ModalSurface inherits TouchArea {
+    callback dismissed();
+    width: 100%;
+    height: 100%;
+    pointer-event(event) => {
+        if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
+            root.dismissed();
+        }
+        return EventResult.accept;
+    }
+}

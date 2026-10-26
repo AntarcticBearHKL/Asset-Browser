@@ -137,6 +137,66 @@ struct App {
 
 thread_local! {
     static APP: RefCell<Option<Rc<RefCell<App>>>> = RefCell::new(None);
+    /// The Slint handle, so the Win32 window proc can dismiss panels on a
+    /// right-click before the event reaches any Flickable/button.
+    static UI_HANDLE: RefCell<Option<Weak<AppWindow>>> = RefCell::new(None);
+    /// A right-down that closed a panel also swallows its matching right-up.
+    static SWALLOW_RIGHT_UP: Cell<bool> = const { Cell::new(false) };
+}
+
+fn any_panel_open(ui: &AppWindow) -> bool {
+    ui.get_detail_open()
+        || ui.get_cart_open()
+        || ui.get_blender_open()
+        || ui.get_unity_open()
+        || ui.get_painter_open()
+        || ui.get_settings_open()
+        || ui.get_pick_open() >= 0
+        || ui.get_page_edit_open()
+}
+
+fn dismiss_top_panel(ui: &AppWindow) {
+    if ui.get_detail_open() {
+        ui.invoke_close_detail();
+    } else if ui.get_cart_open() {
+        ui.invoke_close_cart();
+    } else if ui.get_blender_open() {
+        ui.invoke_blender_close();
+    } else if ui.get_unity_open() {
+        ui.invoke_unity_close();
+    } else if ui.get_painter_open() {
+        ui.invoke_painter_close();
+    } else if ui.get_settings_open() {
+        ui.set_settings_open(false);
+    } else if ui.get_pick_open() >= 0 {
+        ui.set_pick_open(-1);
+    } else if ui.get_page_edit_open() {
+        ui.set_page_edit_open(false);
+    }
+}
+
+/// Called from `WM_RBUTTONDOWN`; returns true when the message should be
+/// swallowed. The actual close is queued so the Win32 proc never re-enters
+/// Slint while it is dispatching a window message.
+fn begin_right_click_dismiss() -> bool {
+    let Some(ui) = UI_HANDLE.with(|cell| cell.borrow().as_ref().and_then(|w| w.upgrade())) else {
+        return false;
+    };
+    if !any_panel_open(&ui) {
+        return false;
+    }
+    SWALLOW_RIGHT_UP.with(|cell| cell.set(true));
+    let weak = ui.as_weak();
+    let _ = slint::invoke_from_event_loop(move || {
+        if let Some(ui) = weak.upgrade() {
+            dismiss_top_panel(&ui);
+        }
+    });
+    true
+}
+
+fn consume_right_click_up() -> bool {
+    SWALLOW_RIGHT_UP.with(|cell| cell.replace(false))
 }
 
 /// Run `f` with the shared app on the UI thread. Returns `None` when the app is
@@ -1715,6 +1775,8 @@ fn apply_backdrop(ui: &AppWindow) -> bool {
     }
 
     const GWLP_WNDPROC: i32 = -4;
+    const WM_RBUTTONDOWN: u32 = 0x0204;
+    const WM_RBUTTONUP: u32 = 0x0205;
     const WM_NCCALCSIZE: u32 = 0x0083;
     const WM_NCHITTEST: u32 = 0x0084;
     const WM_GETMINMAXINFO: u32 = 0x0024;
@@ -1810,6 +1872,15 @@ fn apply_backdrop(ui: &AppWindow) -> bool {
         wparam: usize,
         lparam: isize,
     ) -> isize {
+        // Right-click dismisses the top-most panel before it reaches a
+        // Flickable or button, which would otherwise swallow it.
+        if msg == WM_RBUTTONDOWN && crate::begin_right_click_dismiss() {
+            return 0;
+        }
+        if msg == WM_RBUTTONUP && crate::consume_right_click_up() {
+            return 0;
+        }
+
         // Client area == whole window for BOTH the "proposed parameters" form
         // (wparam != 0) and the plain window-rect form (wparam == 0). Falling
         // through to the default proc here is what computes a standard caption +
@@ -2395,6 +2466,7 @@ fn main() -> Result<(), slint::PlatformError> {
     });
 
     let ui = AppWindow::new()?;
+    UI_HANDLE.with(|cell| *cell.borrow_mut() = Some(ui.as_weak()));
 
     // The .slint window no longer pins width/height (a constant binding froze the
     // surface size); set the initial size here, before the first show().
@@ -4244,7 +4316,8 @@ fn wire_callbacks(ui: &AppWindow, app_rc: &Rc<RefCell<App>>, drag: &Rc<WindowDra
             if let Ok(mut a) = app_rc.try_borrow_mut() {
                 if let Some(pos) = a.state.index_of(&code) {
                     if let Some(u) = weak.upgrade() {
-                        u.set_cart_open(false);
+                        // Keep cart-open set: the cart is hidden by the detail
+                        // sheet and reappears when that sheet closes.
                         open_detail(&u, &mut a, pos);
                     }
                 }
