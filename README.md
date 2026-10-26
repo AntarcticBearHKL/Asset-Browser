@@ -104,7 +104,7 @@ themselves when `D:\3D Resource\_Catalog\manifest.json` is absent.
   rows never overflow. The grid is **paged rather than endlessly scrolled**: the row model
   only ever holds the current page, and a floating pill at the bottom carries
   `« ‹ n / N › »`. The page number is **click-to-edit** (type a page, Enter or click away
-  to jump). Page size (`12 / 24 / 48 / 96`, default 12) lives in the toolbar and opens a
+  to jump). Page size (`12 / 24 / 48 / 96`, default 48) lives in the toolbar and opens a
   popup menu. Changing page scrolls to the top; changing page size keeps the first visible
   item; changing tab/filters/sort clamps the page so it can never point past the last one.
   Each card has a square thumbnail well, a code plate, path-drawn action icons, the slug and

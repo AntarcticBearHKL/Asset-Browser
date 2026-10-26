@@ -328,15 +328,16 @@ fn column_options_are_the_documented_set() {
 
 #[test]
 fn page_count_rounds_up_and_never_hits_zero() {
+    assert_eq!(models(1).page_size, 48, "the default page is 48 cards");
     assert_eq!(models(0).page_count(), 1, "empty list still has one page");
-    assert_eq!(models(12).page_count(), 1, "exact multiple");
-    assert_eq!(models(13).page_count(), 2, "remainder adds a page");
-    assert_eq!(models(24).page_count(), 2);
+    assert_eq!(models(48).page_count(), 1, "exact multiple");
+    assert_eq!(models(49).page_count(), 2, "remainder adds a page");
+    assert_eq!(models(96).page_count(), 2);
 }
 
 #[test]
 fn page_count_matches_the_ceiling_of_filtered_over_page_size() {
-    let s = models(37);
+    let s = models(97);
     let filtered = s.filtered().len();
     println!(
         "PAGINATION filtered={} page_size={} page_count={}",
@@ -345,12 +346,13 @@ fn page_count_matches_the_ceiling_of_filtered_over_page_size() {
         s.page_count()
     );
     assert_eq!(s.page_count(), (filtered + s.page_size - 1) / s.page_size);
-    assert_eq!(s.page_count(), 4, "37 items at 12/page is 12,12,12,1");
+    assert_eq!(s.page_count(), 3, "97 items at 48/page is 48,48,1");
 }
 
 #[test]
 fn clamp_page_pulls_the_index_back_after_the_list_shrinks() {
     let mut s = models(30);
+    s.page_size = 12;
     s.page = 2;
     assert_eq!(s.page_count(), 3);
     s.items = models(5).items;

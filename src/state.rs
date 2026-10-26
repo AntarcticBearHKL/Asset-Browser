@@ -105,7 +105,7 @@ impl AppState {
             tag: String::new(),
             sort: SortKey::Code,
             page: 0,
-            page_size: 12,
+            page_size: 48,
             columns: 6,
             random_order: None,
             cart,

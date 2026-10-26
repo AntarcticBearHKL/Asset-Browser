@@ -84,7 +84,7 @@ export component AppWindow inherits Window {
 
     in property <int>        page: 0;
     in property <int>        page-count: 1;
-    in property <int>        page-size: 12;
+    in property <int>        page-size: 48;
     in property <[int]>      page-sizes: [];
     // Parallel to `page-sizes` (same length/order), same values as strings:
     // the pick popup's `for` list is typed [string], so it needs a string list.
@@ -515,6 +515,15 @@ export component AppWindow inherits Window {
                     }
                 }
 
+                Rectangle { width: 1px; height: 24px; background: Theme.border-strong; }
+
+                Btn {
+                    label: "Refresh";
+                    width: 88px;
+                    height: 34px;
+                    enabled: !root.busy;
+                    clicked => { root.refresh-all(); }
+                }
             }
         }
 
@@ -562,15 +571,6 @@ export component AppWindow inherits Window {
 
                 Rectangle { horizontal-stretch: 1; }
 
-                Btn {
-                    label: "Refresh";
-                    width: 82px;
-                    height: 28px;
-                    font-size: 11px;
-                    mono: true;
-                    enabled: !root.busy;
-                    clicked => { root.refresh-all(); }
-                }
                 Text {
                     text: root.matching-label;
                     font-family: "Cascadia Mono";
