@@ -395,6 +395,38 @@ fn set_columns_accepts_only_the_documented_options() {
 }
 
 #[test]
+fn dice_shuffles_the_same_filtered_set() {
+    let mut s = models(100);
+    let sorted = s.filtered();
+    s.randomize();
+
+    assert!(s.random_active());
+    assert_eq!(s.page, 0, "a shuffle starts at the first page");
+    assert_eq!(s.page_count(), sorted.len().div_ceil(s.page_size));
+
+    let mut shuffled = s.view_indices();
+    let mut expected = sorted;
+    shuffled.sort_unstable();
+    expected.sort_unstable();
+    assert_eq!(shuffled, expected, "the dice only reorders, never filters");
+
+    s.reset_filters();
+    assert!(!s.random_active(), "clearing filters drops the shuffle");
+}
+
+#[test]
+fn sort_and_tab_changes_drop_the_shuffle() {
+    let mut s = models(20);
+    s.randomize();
+    s.set_sort_index(1);
+    assert!(!s.random_active(), "a new sort returns to sorted order");
+
+    s.randomize();
+    s.set_tab(Kind::Material);
+    assert!(!s.random_active(), "a new tab drops the shuffle");
+}
+
+#[test]
 fn page_slice_and_rows_chunk_thirteen_items_as_6_6_1() {
     let all: Vec<usize> = (0..13).collect();
 

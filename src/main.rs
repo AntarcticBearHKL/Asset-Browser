@@ -322,7 +322,7 @@ fn rows_from_slice(slice: &[usize], columns: usize) -> Vec<GridRow> {
 }
 
 fn rebuild_rows(ui: &AppWindow, a: &App) {
-    let all = a.state.filtered();
+    let all = a.state.view_indices();
     let slice = page_slice(&all, a.state.first_item_on_page(), a.state.page_size);
     ui.set_rows(ModelRc::new(VecModel::from(rows_from_slice(
         slice,
@@ -358,6 +358,7 @@ fn sync_view(ui: &AppWindow, a: &App) {
     ui.set_page_count(a.state.page_count() as i32);
     ui.set_page_size(a.state.page_size as i32);
     ui.set_columns(a.state.columns as i32);
+    ui.set_random_active(a.state.random_active());
     rebuild_rows(ui, a);
 }
 
@@ -2501,6 +2502,7 @@ fn wire_callbacks(ui: &AppWindow, app_rc: &Rc<RefCell<App>>, drag: &Rc<WindowDra
         ui.on_set_query(move |text| {
             if let Ok(mut a) = app_rc.try_borrow_mut() {
                 a.state.q = text.to_string();
+                a.state.clear_random();
                 a.state.clamp_page();
                 if let Some(u) = weak.upgrade() {
                     sync_view(&u, &a);
@@ -2514,6 +2516,7 @@ fn wire_callbacks(ui: &AppWindow, app_rc: &Rc<RefCell<App>>, drag: &Rc<WindowDra
         ui.on_clear_query(move || {
             if let Ok(mut a) = app_rc.try_borrow_mut() {
                 a.state.q.clear();
+                a.state.clear_random();
                 a.state.clamp_page();
                 if let Some(u) = weak.upgrade() {
                     u.set_query("".into());
@@ -2540,6 +2543,7 @@ fn wire_callbacks(ui: &AppWindow, app_rc: &Rc<RefCell<App>>, drag: &Rc<WindowDra
                 }
                 a.state.l1 = next;
                 a.state.l2.clear();
+                a.state.clear_random();
                 a.state.ensure_integrity();
                 a.state.clamp_page();
                 if let Some(u) = weak.upgrade() {
@@ -2563,6 +2567,7 @@ fn wire_callbacks(ui: &AppWindow, app_rc: &Rc<RefCell<App>>, drag: &Rc<WindowDra
                     return;
                 }
                 a.state.l2 = next;
+                a.state.clear_random();
                 a.state.ensure_integrity();
                 a.state.clamp_page();
                 if let Some(u) = weak.upgrade() {
@@ -2590,6 +2595,7 @@ fn wire_callbacks(ui: &AppWindow, app_rc: &Rc<RefCell<App>>, drag: &Rc<WindowDra
         ui.on_select_style(move |index| {
             if let Ok(mut a) = app_rc.try_borrow_mut() {
                 a.state.style_textured_only = index == 1;
+                a.state.clear_random();
                 a.state.clamp_page();
                 if let Some(u) = weak.upgrade() {
                     u.set_style_index(index);
@@ -2709,6 +2715,19 @@ fn wire_callbacks(ui: &AppWindow, app_rc: &Rc<RefCell<App>>, drag: &Rc<WindowDra
     {
         let app_rc = app_rc.clone();
         let weak = ui.as_weak();
+        ui.on_shuffle(move || {
+            if let Ok(mut a) = app_rc.try_borrow_mut() {
+                a.state.randomize();
+                if let Some(u) = weak.upgrade() {
+                    sync_view(&u, &a);
+                    u.set_grid_scroll(0.0);
+                }
+            }
+        });
+    }
+    {
+        let app_rc = app_rc.clone();
+        let weak = ui.as_weak();
         ui.on_page_goto_text(move |text| {
             if let Ok(mut a) = app_rc.try_borrow_mut() {
                 if let Ok(parsed) = text.trim().parse::<usize>() {
@@ -2748,6 +2767,7 @@ fn wire_callbacks(ui: &AppWindow, app_rc: &Rc<RefCell<App>>, drag: &Rc<WindowDra
                     };
                     app(|a| {
                         a.state.items = items;
+                        a.state.clear_random();
                         a.state.taxonomy =
                             build_taxonomy(&a.state.items, taxonomy_json.as_deref());
                         let valid: std::collections::HashSet<String> =
@@ -2944,6 +2964,7 @@ fn wire_callbacks(ui: &AppWindow, app_rc: &Rc<RefCell<App>>, drag: &Rc<WindowDra
         ui.on_card_tag(move |tag| {
             if let Ok(mut a) = app_rc.try_borrow_mut() {
                 a.state.tag = tag.to_string();
+                a.state.clear_random();
                 a.state.clamp_page();
                 if let Some(u) = weak.upgrade() {
                     sync_view(&u, &a);
@@ -3530,6 +3551,7 @@ fn wire_callbacks(ui: &AppWindow, app_rc: &Rc<RefCell<App>>, drag: &Rc<WindowDra
                         Ok(()) => {
                             if let Some(pos) = a.state.index_of(&code) {
                                 a.state.items.remove(pos);
+                                a.state.clear_random();
                                 a.state.remove_cart(&code);
                                 a.items.set_vec(
                                     a.state.items.iter().map(asset_row).collect::<Vec<_>>(),

@@ -87,6 +87,9 @@ pub struct AppState {
     pub page_size: usize,
     /// Cards per row (always one of `column_options()`).
     pub columns: usize,
+    /// Shuffled display order used by the dice button. `None` is the normal
+    /// sorted/filtered order; any filter or sort change clears it.
+    pub random_order: Option<Vec<usize>>,
     /// Codes, in insertion order.
     pub cart: Vec<String>,
     pub taxonomy: Taxonomy,
@@ -106,6 +109,7 @@ impl AppState {
             page: 0,
             page_size: 12,
             columns: 6,
+            random_order: None,
             cart,
             taxonomy,
         };
@@ -188,14 +192,52 @@ impl AppState {
         out
     }
 
-    /// Number of items currently passing the filters.
-    pub fn filtered_len(&self) -> usize {
-        self.filtered().len()
+    /// Indices the grid should display, in order. The dice button swaps the
+    /// sorted list for a shuffled copy of the same filtered set.
+    pub fn view_indices(&self) -> Vec<usize> {
+        match &self.random_order {
+            Some(order) => order.iter().copied().filter(|&i| i < self.items.len()).collect(),
+            None => self.filtered(),
+        }
+    }
+
+    pub fn random_active(&self) -> bool {
+        self.random_order.is_some()
+    }
+
+    /// Shuffle the current filtered set and show it from the first page.
+    /// Clicking the dice again reshuffles the same set.
+    pub fn randomize(&mut self) {
+        let mut order = self.filtered();
+        if order.is_empty() {
+            self.random_order = None;
+            self.page = 0;
+            return;
+        }
+
+        // No rand crate here: a nanosecond clock seed and an LCG are enough for
+        // a display-order shuffle, and keep the dependency list untouched.
+        let mut seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0x9e37_79b9)
+            | 1;
+        for i in (1..order.len()).rev() {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let j = ((seed >> 33) as usize) % (i + 1);
+            order.swap(i, j);
+        }
+        self.random_order = Some(order);
+        self.page = 0;
+    }
+
+    pub fn clear_random(&mut self) {
+        self.random_order = None;
     }
 
     /// Total pages, never zero (an empty result still reports one page).
     pub fn page_count(&self) -> usize {
-        self.filtered_len().div_ceil(self.page_size).max(1)
+        self.view_indices().len().div_ceil(self.page_size).max(1)
     }
 
     /// Keep `page` inside `0 .. page_count()`.
@@ -287,6 +329,7 @@ impl AppState {
         self.tab = k;
         self.l1.clear();
         self.l2.clear();
+        self.clear_random();
         self.ensure_integrity();
         self.clamp_page();
     }
@@ -297,6 +340,7 @@ impl AppState {
         self.l2.clear();
         self.tag.clear();
         self.style_textured_only = false;
+        self.clear_random();
         self.page = 0;
         self.clamp_page();
     }
@@ -328,6 +372,7 @@ impl AppState {
     /// Set the sort from a `sort_options()` index, downgrading triangle sorts on
     /// tabs that have no triangle data.
     pub fn set_sort_index(&mut self, i: i32) {
+        self.clear_random();
         let next = SortKey::from_index(i);
         self.sort = match next {
             SortKey::TriAsc | SortKey::TriDesc

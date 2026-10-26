@@ -93,6 +93,7 @@ export component AppWindow inherits Window {
     in property <int>        columns: 6;
     in property <[int]>      column-options: [];
     in property <[string]>   column-labels: [];
+    in property <bool>       random-active: false;
     in-out property <length> grid-scroll: 0px;
 
     in-out property <bool>   page-edit-open: false;
@@ -204,6 +205,7 @@ export component AppWindow inherits Window {
     callback page-goto-text(string);
     callback set-page-size(int);
     callback set-columns(int);
+    callback shuffle();
     callback refresh-all();
     callback ensure-image(int);
     callback card-cart(int);
@@ -440,15 +442,6 @@ export component AppWindow inherits Window {
                 padding-bottom: 12px;
                 spacing: 8px;
 
-                Text {
-                    text: "LIBRARY";
-                    font-family: "Cascadia Mono";
-                    font-size: 11px;
-                    letter-spacing: 1px;
-                    color: Theme.text-faint;
-                    vertical-alignment: center;
-                }
-
                 search := Rectangle {
                     min-width: 200px;
                     max-width: 420px;
@@ -504,6 +497,13 @@ export component AppWindow inherits Window {
                         commands: "M 3 3 L 11 11 M 11 3 L 3 11";
                         clicked => { root.clear-query(); }
                     }
+                }
+
+                IconBtn {
+                    size: 34px;
+                    commands: "M 4 4 L 20 4 L 20 20 L 4 20 Z M 8 8 L 8.5 8 M 15.5 8 L 16 8 M 12 12 L 12.5 12 M 8 16 L 8.5 16 M 15.5 16 L 16 16";
+                    active: root.random-active;
+                    clicked => { root.shuffle(); }
                 }
 
                 l1-pick := Pick { width: 150px; value: root.l1-value; open: root.pick-open == 0; clicked => { root.pick-open = root.pick-open == 0 ? -1 : 0; } }
