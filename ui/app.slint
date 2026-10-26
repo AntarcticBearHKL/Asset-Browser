@@ -501,6 +501,7 @@ export component AppWindow inherits Window {
 
                 IconBtn {
                     size: 34px;
+                    framed: true;
                     commands: "M 4 4 L 20 4 L 20 20 L 4 20 Z M 8 8 L 8.5 8 M 15.5 8 L 16 8 M 12 12 L 12.5 12 M 8 16 L 8.5 16 M 15.5 16 L 16 16";
                     active: root.random-active;
                     clicked => { root.shuffle(); }
