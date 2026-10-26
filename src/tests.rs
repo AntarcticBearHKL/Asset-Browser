@@ -1615,3 +1615,76 @@ fn deepseek_tag_prompt_carries_taxonomy_and_asset() {
     assert!(prompt.contains("1.40x1.10x1.50 m"));
     assert!(prompt.contains("\"confidence\""));
 }
+
+/* ------------------------------ blender bridge -------------------------- */
+
+#[test]
+fn blender_result_reads_the_nested_success_reply() {
+    let reply = r#"{"status":"ok","result":{"imported":["a.fbx","b.fbx"],"errors":[],"count":2,"bound":["AR-1"],"bind_errors":[]}}"#;
+    let (message, tone) = crate::blender_result(&Ok(reply.to_string()), "import", 7);
+    assert_eq!(tone, "ok");
+    assert_eq!(message, "Imported 2 to Blender");
+}
+
+#[test]
+fn blender_result_reports_partial_import_failures() {
+    let reply = r#"{"status":"ok","result":{"imported":["a.fbx"],"errors":[["b.fbx","ASCII FBX files are not supported"]],"count":1,"bind_errors":[]}}"#;
+    let (message, tone) = crate::blender_result(&Ok(reply.to_string()), "import", 2);
+    assert_eq!(tone, "error");
+    assert!(message.contains("Imported 1, 1 failed"), "{message}");
+    assert!(message.contains("ASCII FBX"), "{message}");
+}
+
+#[test]
+fn blender_result_accepts_the_open_window_reply() {
+    let (message, tone) =
+        crate::blender_result(&Ok(r#"{"ok":true,"opened":3}"#.to_string()), "open", 0);
+    assert_eq!(tone, "ok");
+    assert_eq!(message, "Opened 3 in a new Blender window");
+}
+
+#[test]
+fn blender_result_surfaces_a_top_level_error() {
+    let (message, tone) = crate::blender_result(
+        &Ok(r#"{"status":"error","message":"Traceback: boom"}"#.to_string()),
+        "import",
+        1,
+    );
+    assert_eq!(tone, "error");
+    assert_eq!(message, "Traceback: boom");
+}
+
+#[test]
+fn blender_import_code_binds_only_after_a_finished_import() {
+    let it = item("AR-0001", "model", "Architecture", "Beam", "beam_1", &[]);
+    let code = crate::bridge::blender_import_code(&[it], r"D:\3D Resource");
+    let import_at = code.find("bpy.ops.import_scene.fbx").expect("import call");
+    let bind_at = code.find("p.asset_rel =").expect("binding");
+    assert!(import_at < bind_at, "assetlib must not be bound before import");
+    assert!(code.contains("Kaydara FBX Binary"), "ASCII guard missing");
+    assert!(code.contains("'FINISHED' not in _ret"), "cancelled import unchecked");
+    assert!(code.contains("_scale = 1.0"), "zero unit scale fallback missing");
+}
+
+#[test]
+fn blender_preflight_rejects_ascii_fbx_before_clearing_the_scene() {
+    let root = std::env::temp_dir().join(format!("alb-preflight-{}", std::process::id()));
+    let dir = root.join("Models").join("Architecture").join("Beam").join("beam_x");
+    std::fs::create_dir_all(&dir).unwrap();
+    let fbx = dir.join("beam_x.fbx");
+
+    std::fs::write(&fbx, b"; FBX 7.7.0 project file\n").unwrap();
+    let mut it = item("AR-0001", "model", "Architecture", "Beam", "beam_x", &[]);
+    it.path = "Models/Architecture/Beam/beam_x".into();
+    let err = crate::bridge::blender_preflight(&[it], root.to_str().unwrap()).unwrap_err();
+    assert!(err.contains("AR-0001"), "{err}");
+    assert!(err.contains("ASCII FBX"), "{err}");
+
+    std::fs::write(&fbx, b"Kaydara FBX Binary  \x00rest").unwrap();
+    let mut it = item("AR-0001", "model", "Architecture", "Beam", "beam_x", &[]);
+    it.path = "Models/Architecture/Beam/beam_x".into();
+    assert!(crate::bridge::blender_preflight(&[it], root.to_str().unwrap()).is_ok());
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+

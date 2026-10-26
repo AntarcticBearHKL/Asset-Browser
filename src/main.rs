@@ -1010,50 +1010,91 @@ fn probe_all(ui: Weak<AppWindow>) {
 }
 
 fn blender_result(res: &Result<String, String>, mode: &str, fallback: usize) -> (String, String) {
+    fn details(payload: &serde_json::Value, key: &str) -> (usize, Option<String>) {
+        let Some(list) = payload.get(key).and_then(|v| v.as_array()) else {
+            return (0, None);
+        };
+        let first = list.first().and_then(|entry| {
+            if let Some(pair) = entry.as_array() {
+                let who = pair.first().and_then(|v| v.as_str()).unwrap_or("");
+                let what = pair.get(1).and_then(|v| v.as_str()).unwrap_or("");
+                Some(if who.is_empty() {
+                    what.to_string()
+                } else {
+                    format!("{who}: {what}")
+                })
+            } else {
+                entry.as_str().map(str::to_string)
+            }
+        });
+        (list.len(), first)
+    }
+
     match res {
         Err(e) => (e.clone(), "error".to_string()),
-        Ok(body) => match serde_json::from_str::<serde_json::Value>(body) {
-            Err(_) => (
-                format!("Blender bridge replied ({fallback})"),
-                "ok".to_string(),
-            ),
-            Ok(v) => {
-                let ok = v.get("ok").and_then(|x| x.as_bool()).unwrap_or(false);
-                if mode == "open" {
-                    if ok {
-                        let opened = v
-                            .get("opened")
-                            .and_then(|x| x.as_i64())
-                            .unwrap_or(fallback as i64);
-                        (format!("Opened {opened} in a new Blender window"), "ok".into())
-                    } else {
-                        (
-                            v.get("error")
-                                .and_then(|x| x.as_str())
-                                .unwrap_or("Failed to launch")
-                                .to_string(),
-                            "error".into(),
-                        )
-                    }
-                } else if ok {
-                    let imported = v
-                        .get("result")
-                        .and_then(|r| r.get("result"))
-                        .and_then(|r| r.get("count"))
-                        .and_then(|c| c.as_i64())
-                        .unwrap_or(fallback as i64);
-                    (format!("Imported {imported} to Blender"), "ok".into())
-                } else {
-                    (
-                        v.get("error")
-                            .and_then(|x| x.as_str())
-                            .unwrap_or("Import failed")
-                            .to_string(),
-                        "error".into(),
-                    )
-                }
+        Ok(body) => {
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(body) else {
+                return (
+                    format!("Blender bridge replied ({fallback})"),
+                    "ok".to_string(),
+                );
+            };
+
+            let ok = v.get("status").and_then(|s| s.as_str()) == Some("ok")
+                || v.get("ok").and_then(|b| b.as_bool()) == Some(true);
+            if !ok {
+                let message = v
+                    .get("error")
+                    .or_else(|| v.get("message"))
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("Import failed");
+                return (message.to_string(), "error".to_string());
             }
-        },
+
+            if mode == "open" {
+                let opened = v
+                    .get("opened")
+                    .and_then(|x| x.as_i64())
+                    .unwrap_or(fallback as i64);
+                return (format!("Opened {opened} in a new Blender window"), "ok".into());
+            }
+
+            // The addon replies `{"status":"ok","result":{...}}`; accept a flat
+            // `{...}` too so an older bridge build still reports correctly.
+            let payload = v.get("result").unwrap_or(&v);
+            let imported = payload
+                .get("count")
+                .and_then(|c| c.as_i64())
+                .or_else(|| {
+                    payload
+                        .get("imported")
+                        .and_then(|a| a.as_array())
+                        .map(|a| a.len() as i64)
+                })
+                .unwrap_or(fallback as i64);
+
+            let (failed, first_error) = details(payload, "errors");
+            let (bind_failed, first_bind_error) = details(payload, "bind_errors");
+            if failed > 0 {
+                let detail = first_error.unwrap_or_else(|| "unknown error".to_string());
+                let detail: String = detail.chars().take(140).collect();
+                let message = if imported > 0 {
+                    format!("Imported {imported}, {failed} failed: {detail}")
+                } else {
+                    format!("Import failed: {detail}")
+                };
+                return (message, "error".to_string());
+            }
+            if bind_failed > 0 {
+                let detail = first_bind_error.unwrap_or_else(|| "unknown error".to_string());
+                let detail: String = detail.chars().take(140).collect();
+                return (
+                    format!("Imported {imported}; bridge binding failed: {detail}"),
+                    "error".to_string(),
+                );
+            }
+            (format!("Imported {imported} to Blender"), "ok".into())
+        }
     }
 }
 

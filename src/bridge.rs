@@ -15,7 +15,7 @@ use serde_json::json;
 use crate::model::{Item, Kind};
 
 const HEALTH_TIMEOUT: Duration = Duration::from_millis(2000);
-const SEND_TIMEOUT: Duration = Duration::from_secs(120);
+const SEND_TIMEOUT: Duration = Duration::from_secs(900);
 
 /// Blender MCP addon socket.
 pub const BLENDER_ADDON: &str = "127.0.0.1:9876";
@@ -129,7 +129,7 @@ fn blender_execute(addr: &str, code: &str, timeout: Duration) -> Result<serde_js
 
 /// Python run inside Blender: clear the scene, then import each FBX and bind
 /// the asset into `scene.assetlib` so the Asset Library Bridge panel shows it.
-fn blender_import_code(items: &[Item], root: &str) -> String {
+pub(crate) fn blender_import_code(items: &[Item], root: &str) -> String {
     let root_w = root.replace('/', "\\");
     let mut lines = vec![
         "import bpy".to_string(),
@@ -150,14 +150,39 @@ fn blender_import_code(items: &[Item], root: &str) -> String {
         // The bridge panel's rig tools key off `rig_slug`; models must clear it
         // so a rig bound earlier cannot leak into the next send.
         let rig_slug = if it.kind == "rig" { slug.as_str() } else { "" };
+
+        // Bind `scene.assetlib` only after the FBX importer succeeded: the
+        // panel must not advertise a name for an asset that failed to import.
         lines.push(format!(
-            "try:\n    try:\n        p = scene.assetlib\n        p.library_root = r'{root_w}'\n        p.asset_rel = r'{rel}'\n        p.slug = r'{slug}'\n        p.code = r'{code}'\n        p.rig_slug = r'{rig_slug}'\n        bound.append(r'{code}')\n    except Exception as e:\n        bind_errors.append([r'{code}', str(e)])\n    bpy.ops.import_scene.fbx(filepath=r'{fbx}', global_scale=scene.unit_settings.scale_length)\n    imported.append(r'{fbx}')\nexcept Exception as e:\n    errors.append([r'{fbx}', str(e)])"
+            "try:\n    with open(r'{fbx}', 'rb') as _fh:\n        _head = _fh.read(18)\n    if not _head.startswith(b'Kaydara FBX Binary'):\n        raise RuntimeError('not a binary FBX (Blender does not support ASCII FBX)')\n    _scale = scene.unit_settings.scale_length\n    if not _scale or _scale <= 0:\n        _scale = 1.0\n    _ret = bpy.ops.import_scene.fbx(filepath=r'{fbx}', global_scale=_scale)\n    if 'FINISHED' not in _ret:\n        raise RuntimeError('FBX importer returned %r' % (_ret,))\n    imported.append(r'{fbx}')\n    try:\n        p = scene.assetlib\n        p.library_root = r'{root_w}'\n        p.asset_rel = r'{rel}'\n        p.slug = r'{slug}'\n        p.code = r'{code}'\n        p.rig_slug = r'{rig_slug}'\n        bound.append(r'{code}')\n    except Exception as e:\n        bind_errors.append([r'{code}', str(e)])\nexcept Exception as e:\n    errors.append([r'{code}', str(e)])"
         ));
     }
     lines.push(
         "result = {'imported': imported, 'errors': errors, 'count': len(imported), 'bound': bound, 'bind_errors': bind_errors}".to_string(),
     );
     lines.join("\n")
+}
+
+/// Reject assets Blender cannot import before the scene is cleared. Blender's
+/// FBX importer only reads binary FBX; the ASCII ones otherwise wipe the scene
+/// and then fail (the bridge panel used to keep the failed name as well).
+pub(crate) fn blender_preflight(items: &[Item], root: &str) -> Result<(), String> {
+    for it in items {
+        let fbx = abs_win(root, &it.fbx_rel());
+        let mut file = std::fs::File::open(&fbx)
+            .map_err(|e| format!("{}: cannot open {} ({e})", it.code, fbx))?;
+        let mut head = [0u8; 18];
+        let n = file
+            .read(&mut head)
+            .map_err(|e| format!("{}: cannot read {} ({e})", it.code, fbx))?;
+        if n < head.len() || &head[..] != b"Kaydara FBX Binary" {
+            return Err(format!(
+                "{}: not a binary FBX (Blender does not support ASCII FBX; re-export it as binary)",
+                it.code
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Blender addon address; an empty/blank base falls back to the default port.
@@ -188,6 +213,7 @@ pub fn blender_send(base: &str, root: &str, mode: &str, items: &[Item]) -> Resul
     if items.is_empty() {
         return Err("No assets to import".to_string());
     }
+    blender_preflight(items, root)?;
     let code = blender_import_code(items, root);
 
     if mode == "open" {
@@ -196,7 +222,7 @@ pub fn blender_send(base: &str, root: &str, mode: &str, items: &[Item]) -> Resul
             .arg(&code)
             .spawn()
             .map_err(|e| format!("Could not launch Blender: {e}"))?;
-        return Ok(format!("{{\"opened\":{}}}", items.len()));
+        return Ok(format!("{{\"ok\":true,\"opened\":{}}}", items.len()));
     }
 
     let addr = blender_addr(base);
@@ -209,6 +235,7 @@ pub fn blender_send(base: &str, root: &str, mode: &str, items: &[Item]) -> Resul
     } else {
         Err(reply
             .get("error")
+            .or_else(|| reply.get("message"))
             .and_then(|e| e.as_str())
             .unwrap_or("Blender returned an error")
             .to_string())
