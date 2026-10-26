@@ -1,6 +1,6 @@
 [package]
 name = "asset-library-desktop"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 build = "build.rs"
 description = "Native desktop browser for the local 3D asset library (Rust + Slint)"
@@ -19,8 +19,19 @@ raw-window-handle = "0.6"
 [build-dependencies]
 slint-build = "1.18"
 
+# Compile speed first: the dev profile exists for the edit/verify loop, not for
+# shipping. This crate is unoptimized -- it is what gets rebuilt on every edit --
+# while dependencies stay optimized (2), because they are compiled once and own
+# the runtime-heavy code (Slint renderer, glTF parsing, ...). `debug = 1` keeps
+# line numbers and backtraces but drops the local-variable info that made PDBs
+# and incremental sessions multi-GB; incremental is on for this crate only.
 [profile.dev]
-opt-level = 1
+opt-level = 0
+debug = 1
+incremental = true
 
+# Dependencies: optimized once, no incremental state (they never change).
 [profile.dev.package."*"]
 opt-level = 2
+debug = 1
+incremental = false

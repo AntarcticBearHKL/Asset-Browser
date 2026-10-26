@@ -1,8 +1,16 @@
 # Rust build output — this directory is ~11 GB locally; never commit it.
 /target/
 
+# Local cargo tuning — the linker path in it is machine-specific.
+/.cargo/
+
 # Packaged release artifacts (the zip is published as a GitHub Release asset).
 /dist/
+
+# Python MCP sidecar — generated environment and caches
+/mcp/.venv/
+/mcp/**/__pycache__/
+/mcp/.ruff_cache/
 
 # Local runtime state. The app writes this under %APPDATA%\asset-library-desktop\,
 # but guard against a copy being dropped next to the sources.

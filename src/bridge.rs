@@ -127,7 +127,8 @@ fn blender_execute(addr: &str, code: &str, timeout: Duration) -> Result<serde_js
     serde_json::from_slice(&out[..end]).map_err(|e| e.to_string())
 }
 
-/// Python run inside Blender: clear the scene, then import each FBX.
+/// Python run inside Blender: clear the scene, then import each FBX and bind
+/// the asset into `scene.assetlib` so the Asset Library Bridge panel shows it.
 fn blender_import_code(items: &[Item], root: &str) -> String {
     let root_w = root.replace('/', "\\");
     let mut lines = vec![
@@ -135,6 +136,8 @@ fn blender_import_code(items: &[Item], root: &str) -> String {
         "import os".to_string(),
         "imported = []".to_string(),
         "errors = []".to_string(),
+        "bound = []".to_string(),
+        "bind_errors = []".to_string(),
         "scene = bpy.context.scene".to_string(),
         "for _o in list(bpy.data.objects):".to_string(),
         "    bpy.data.objects.remove(_o, do_unlink=True)".to_string(),
@@ -144,12 +147,15 @@ fn blender_import_code(items: &[Item], root: &str) -> String {
         let rel = it.path().replace('/', "\\");
         let slug = &it.slug;
         let code = &it.code;
+        // The bridge panel's rig tools key off `rig_slug`; models must clear it
+        // so a rig bound earlier cannot leak into the next send.
+        let rig_slug = if it.kind == "rig" { slug.as_str() } else { "" };
         lines.push(format!(
-            "try:\n    try:\n        p = scene.assetlib\n        p.library_root = r'{root_w}'\n        p.asset_rel = r'{rel}'\n        p.slug = r'{slug}'\n        p.code = r'{code}'\n    except Exception:\n        pass\n    bpy.ops.import_scene.fbx(filepath=r'{fbx}', global_scale=scene.unit_settings.scale_length)\n    imported.append(r'{fbx}')\nexcept Exception as e:\n    errors.append([r'{fbx}', str(e)])"
+            "try:\n    try:\n        p = scene.assetlib\n        p.library_root = r'{root_w}'\n        p.asset_rel = r'{rel}'\n        p.slug = r'{slug}'\n        p.code = r'{code}'\n        p.rig_slug = r'{rig_slug}'\n        bound.append(r'{code}')\n    except Exception as e:\n        bind_errors.append([r'{code}', str(e)])\n    bpy.ops.import_scene.fbx(filepath=r'{fbx}', global_scale=scene.unit_settings.scale_length)\n    imported.append(r'{fbx}')\nexcept Exception as e:\n    errors.append([r'{fbx}', str(e)])"
         ));
     }
     lines.push(
-        "result = {'imported': imported, 'errors': errors, 'count': len(imported)}".to_string(),
+        "result = {'imported': imported, 'errors': errors, 'count': len(imported), 'bound': bound, 'bind_errors': bind_errors}".to_string(),
     );
     lines.join("\n")
 }
@@ -279,20 +285,23 @@ pub fn unity_health(base: &str) -> Dot {
     }
 }
 
-/// One asset into the open Unity scene. `request_id` makes it idempotent.
-pub fn unity_place_item(base: &str, it: &Item, request_id: &str) -> Result<String, String> {
-    if it.slug.is_empty() {
-        return Err("Missing slug".to_string());
+/// A whole set into the open Unity scene in one request: Unity stages/imports the batch as a
+/// single transaction, then lays the set out in the scene. `request_id` makes a retry idempotent.
+pub fn unity_place_items(base: &str, slugs: &[String], request_id: &str) -> Result<String, String> {
+    let slugs: Vec<&str> = slugs.iter().map(|s| s.as_str()).filter(|s| !s.is_empty()).collect();
+    if slugs.is_empty() {
+        return Err("Nothing to place".to_string());
     }
+    let csv = slugs.join(",");
     let call = if request_id.is_empty() {
         format!(
-            "HKLGame.AssetLib.AssetLibraryBridge.PlaceBySlug({})",
-            csharp_literal(&it.slug)
+            "HKLGame.AssetLib.AssetLibraryBridge.PlaceMany({})",
+            csharp_literal(&csv)
         )
     } else {
         format!(
-            "HKLGame.AssetLib.AssetLibraryBridge.PlaceBySlug({}, {})",
-            csharp_literal(&it.slug),
+            "HKLGame.AssetLib.AssetLibraryBridge.PlaceMany({}, {})",
+            csharp_literal(&csv),
             csharp_literal(request_id)
         )
     };

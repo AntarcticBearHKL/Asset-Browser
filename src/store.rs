@@ -49,6 +49,25 @@ pub struct Store {
     pub glass_transparency_light: f32,
     #[serde(default = "blur_default")]
     pub glass_blur: f32,
+    /// AI tagging: DeepSeek key + endpoint. Empty key = feature off; the Blender
+    /// add-on and the MCP server read the same file, so this is the one place a
+    /// key is configured.
+    #[serde(default)]
+    pub deepseek_api_key: String,
+    #[serde(default = "deepseek_model_default")]
+    pub deepseek_model: String,
+    #[serde(default = "deepseek_base_default")]
+    pub deepseek_base: String,
+    #[serde(default)]
+    pub deepseek_auto_tag: bool,
+}
+
+fn deepseek_model_default() -> String {
+    "deepseek-flash".to_string()
+}
+
+fn deepseek_base_default() -> String {
+    "https://api.deepseek.com".to_string()
 }
 
 impl Default for Store {
@@ -65,6 +84,10 @@ impl Default for Store {
             glass_transparency_dark: transparency_dark_default(),
             glass_transparency_light: transparency_light_default(),
             glass_blur: blur_default(),
+            deepseek_api_key: String::new(),
+            deepseek_model: deepseek_model_default(),
+            deepseek_base: deepseek_base_default(),
+            deepseek_auto_tag: false,
         }
     }
 }
@@ -101,6 +124,12 @@ impl Store {
         }
         if !(0.0..=100.0).contains(&self.glass_blur) {
             self.glass_blur = d.glass_blur;
+        }
+        if self.deepseek_model.trim().is_empty() {
+            self.deepseek_model = d.deepseek_model;
+        }
+        if self.deepseek_base.trim().is_empty() {
+            self.deepseek_base = d.deepseek_base;
         }
     }
 

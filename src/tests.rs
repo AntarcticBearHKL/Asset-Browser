@@ -1515,3 +1515,33 @@ fn the_desktop_capture_follows_the_window_without_a_new_capture() {
     let degenerate = crate::backdrop_placement((0, 0), (300, 60), shot, 0.0);
     assert!(degenerate.0.is_finite() && degenerate.2.is_finite() && degenerate.2 > 0.0);
 }
+
+#[test]
+fn deepseek_tag_prompt_carries_taxonomy_and_asset() {
+    // The prompt is what the model sees; it must name the taxonomy, the asset and
+    // the exact JSON contract, otherwise JSON mode tends to drift.
+    let item = crate::model::Item {
+        kind: "model".into(),
+        code: "AU-0001".into(),
+        slug: "old_well".into(),
+        tri_count: 1234,
+        tags: vec!["stone".into()],
+        dimensions_m: Some(crate::model::Dims {
+            width: 1.4,
+            height: 1.1,
+            depth: 1.5,
+        }),
+        ..Default::default()
+    };
+    let mut by_kind = std::collections::BTreeMap::new();
+    let mut prop = std::collections::BTreeMap::new();
+    prop.insert("Container".to_string(), vec!["Barrel".to_string()]);
+    by_kind.insert("model".to_string(), prop);
+    let taxonomy = crate::state::Taxonomy { by_kind };
+
+    let prompt = crate::tag_prompt(&item, &taxonomy, &["stone".to_string()]);
+    assert!(prompt.contains("Container"));
+    assert!(prompt.contains("old_well"));
+    assert!(prompt.contains("1.40x1.10x1.50 m"));
+    assert!(prompt.contains("\"confidence\""));
+}

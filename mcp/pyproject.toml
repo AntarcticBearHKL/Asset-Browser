@@ -1,0 +1,19 @@
+[project]
+name = "asset-library-mcp"
+version = "0.1.0"
+description = "Agent-facing MCP server for the local 3D asset library (search, inspect, edit, transfer into Unity)"
+requires-python = ">=3.11"
+dependencies = [
+    "mcp[cli]>=1.2,<2",
+    "pillow>=10",
+]
+
+[project.scripts]
+asset-library-mcp = "asset_library_mcp.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/asset_library_mcp"]

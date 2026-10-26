@@ -1069,50 +1069,145 @@ fn spawn_blender_send(
     });
 }
 
+/* ------------------------------ deepseek -------------------------------- */
+
+/// One OpenAI-compatible chat call to DeepSeek. `body` is sent as-is so callers
+/// control image blocks / JSON mode / thinking.
+fn deepseek_chat(base: &str, key: &str, body: &serde_json::Value) -> Result<serde_json::Value, String> {
+    let url = format!("{}/chat/completions", base.trim_end_matches('/'));
+    let resp = ureq::post(&url)
+        .set("Content-Type", "application/json")
+        .set("Authorization", &format!("Bearer {key}"))
+        .timeout(std::time::Duration::from_secs(90))
+        .send_json(body.clone())
+        .map_err(|e| match e {
+            ureq::Error::Status(code, r) => {
+                let text = r.into_string().unwrap_or_default();
+                format!("HTTP {code}: {}", text.chars().take(200).collect::<String>())
+            }
+            other => other.to_string(),
+        })?;
+    resp.into_json::<serde_json::Value>()
+        .map_err(|e| format!("bad JSON reply: {e}"))
+}
+
+fn deepseek_ping(base: &str, key: &str, model: &str) -> Result<String, String> {
+    let body = serde_json::json!({
+        "model": model,
+        "messages": [{ "role": "user", "content": "ping" }],
+        "max_tokens": 4,
+        "thinking": { "type": "disabled" }
+    });
+    let doc = deepseek_chat(base, key, &body)?;
+    let text = doc["choices"][0]["message"]["content"].as_str().unwrap_or("");
+    Ok(if text.trim().is_empty() { "ok".to_string() } else { text.trim().chars().take(24).collect() })
+}
+
+fn tag_prompt(item: &Item, taxonomy: &crate::state::Taxonomy, vocab: &[String]) -> String {
+    let kind_key = if item.kind == "material" { "material" } else { "model" };
+    let tax = taxonomy
+        .by_kind
+        .get(kind_key)
+        .map(|m| serde_json::to_string(m).unwrap_or_default())
+        .unwrap_or_else(|| "{}".to_string());
+    let dims = item
+        .dimensions_m
+        .as_ref()
+        .map(|d| format!("{:.2}x{:.2}x{:.2} m", d.width, d.height, d.depth))
+        .unwrap_or_else(|| "?".to_string());
+    format!(
+        "You classify 3D game assets for a local asset library. The attached image is a clay render \
+of the asset (grey material, neutral background). Answer with JSON only - no prose.\n\n\
+TAXONOMY (l1 -> allowed l2 values): {tax}\n\
+EXISTING TAG VOCABULARY (prefer these when they fit): {vocab}\n\
+ASSET: slug={slug}, current tags={tags}, triangles={tris}, size={dims}\n\n\
+Rules: l1 must be one of the taxonomy keys; l2 one of that l1's values; tags 3-8 lowercase \
+snake_case English, specific and useful for search; description one English sentence <=140 chars; \
+confidence 0..1.\n\
+Return exactly: {{\"l1\": \"...\", \"l2\": \"...\", \"tags\": [\"...\"], \"description\": \"...\", \"confidence\": 0.0}}",
+        tax = tax,
+        vocab = vocab.join(", "),
+        slug = item.slug,
+        tags = item.tags.join(", "),
+        tris = item.tri_count,
+        dims = dims,
+    )
+}
+
+fn deepseek_tag_call(
+    base: &str,
+    key: &str,
+    model: &str,
+    prompt: &str,
+    image: &std::path::Path,
+) -> Result<serde_json::Value, String> {
+    use base64::Engine;
+    let bytes = std::fs::read(image).map_err(|e| format!("preview unreadable: {e}"))?;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
+    let body = serde_json::json!({
+        "model": model,
+        "messages": [{
+            "role": "user",
+            "content": [
+                { "type": "text", "text": prompt },
+                { "type": "image_url", "image_url": {
+                    "url": format!("data:image/png;base64,{b64}"),
+                    "detail": "low"
+                }}
+            ]
+        }],
+        "response_format": { "type": "json_object" },
+        "max_tokens": 500,
+        "temperature": 0.2,
+        "thinking": { "type": "disabled" }
+    });
+    let doc = deepseek_chat(base, key, &body)?;
+    let text = doc["choices"][0]["message"]["content"].as_str().unwrap_or("");
+    serde_json::from_str::<serde_json::Value>(text.trim())
+        .map_err(|_| format!("model did not return JSON: {}", text.chars().take(120).collect::<String>()))
+}
+
 fn spawn_unity_place(ui: Weak<AppWindow>, base: String, items: Vec<Item>, label: String) {
-    let mut unique: Vec<Item> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for it in items {
-        if it.slug.is_empty() || !seen.insert(it.code.clone()) {
-            continue;
-        }
-        unique.push(it);
-    }
-    if unique.is_empty() {
+    let slugs: Vec<String> = items
+        .into_iter()
+        .filter(|it| !it.slug.is_empty() && seen.insert(it.code.clone()))
+        .map(|it| it.slug)
+        .collect();
+    if slugs.is_empty() {
         return;
     }
-    let total = unique.len();
+    let total = slugs.len();
     std::thread::spawn(move || {
-        let mut placed = 0usize;
-        let mut first_error = String::new();
-        for (n, it) in unique.iter().enumerate() {
-            let request_id = format!("rq-{}-{}", chrono::Utc::now().timestamp_millis(), n);
-            match bridge::unity_place_item(&base, it, &request_id) {
-                Ok(body) => {
-                    let value = serde_json::from_str::<serde_json::Value>(&body).ok();
-                    let ok = value
-                        .as_ref()
-                        .and_then(|v| v.get("ok"))
-                        .and_then(|x| x.as_bool())
-                        .unwrap_or(false);
-                    if ok {
-                        placed += 1;
-                    } else if first_error.is_empty() {
-                        first_error = value
-                            .as_ref()
-                            .and_then(|v| v.get("error"))
-                            .and_then(|x| x.as_str())
-                            .unwrap_or("Unknown error")
-                            .to_string();
-                    }
-                }
-                Err(e) => {
-                    if first_error.is_empty() {
-                        first_error = e;
-                    }
-                }
+        // One request for the whole set: Unity imports everything in a single transaction and
+        // lays the set out in the scene, instead of one full import per asset.
+        let request_id = format!("rq-{}-bulk", chrono::Utc::now().timestamp_millis());
+        let (placed, failed, first_error) = match bridge::unity_place_items(&base, &slugs, &request_id) {
+            Ok(body) => {
+                let value = serde_json::from_str::<serde_json::Value>(&body).ok();
+                let placed = value
+                    .as_ref()
+                    .and_then(|v| v.get("placed"))
+                    .and_then(|x| x.as_u64())
+                    .unwrap_or(0) as usize;
+                let failed = value
+                    .as_ref()
+                    .and_then(|v| v.get("failed"))
+                    .and_then(|x| x.as_u64())
+                    .unwrap_or((total.saturating_sub(placed)) as u64) as usize;
+                let error = value
+                    .as_ref()
+                    .and_then(|v| v.get("errors"))
+                    .and_then(|x| x.as_array())
+                    .and_then(|a| a.first())
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("Unknown error")
+                    .to_string();
+                (placed, failed, error)
             }
-        }
+            Err(e) => (0usize, total, e),
+        };
+
         let _ = slint::invoke_from_event_loop(move || {
             let Some(u) = ui.upgrade() else {
                 return;
@@ -1125,7 +1220,7 @@ fn spawn_unity_place(ui: Weak<AppWindow>, base: String, items: Vec<Item>, label:
                 }
             } else if placed > 0 {
                 (
-                    format!("Placed {placed}, {} failed: {first_error}", total - placed),
+                    format!("Placed {placed}, {failed} failed: {first_error}"),
                     "error".to_string(),
                 )
             } else if first_error.is_empty() {
@@ -2273,6 +2368,15 @@ fn main() -> Result<(), slint::PlatformError> {
         ui.set_painter_base(a.store.painter_base.clone().into());
         ui.set_painter_bridge(a.store.painter_bridge.clone().into());
         ui.set_painter_root(a.store.painter_root.clone().into());
+        ui.set_deepseek_key(a.store.deepseek_api_key.clone().into());
+        ui.set_deepseek_model(a.store.deepseek_model.clone().into());
+        ui.set_deepseek_state(
+            if a.store.deepseek_api_key.trim().is_empty() {
+                "no key".into()
+            } else {
+                format!("key set · {}", a.store.deepseek_model).into()
+            },
+        );
         sync_all(&ui, &a);
     }
 
@@ -3005,6 +3109,299 @@ fn wire_callbacks(ui: &AppWindow, app_rc: &Rc<RefCell<App>>, drag: &Rc<WindowDra
                     u.set_edit_dirty(dirty);
                 }
             }
+        });
+    }
+    {
+        let app_rc = app_rc.clone();
+        let weak = ui.as_weak();
+        ui.on_detail_ai_tag(move || {
+            let payload = {
+                let Ok(a) = app_rc.try_borrow() else {
+                    return;
+                };
+                let Some(idx) = a.selected else {
+                    return;
+                };
+                let it = a.state.items[idx].clone();
+                let key = a.store.deepseek_api_key.trim().to_string();
+                let model = a.store.deepseek_model.trim().to_string();
+                let base = a.store.deepseek_base.trim().to_string();
+                let root = a.lib.root.clone();
+
+                // Tag vocabulary from the library (keeps AI names consistent).
+                let mut counts: std::collections::HashMap<String, usize> =
+                    std::collections::HashMap::new();
+                for item in &a.state.items {
+                    for t in &item.tags {
+                        *counts.entry(t.clone()).or_insert(0) += 1;
+                    }
+                }
+                let mut vocab: Vec<(String, usize)> = counts.into_iter().collect();
+                vocab.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+                let vocab: Vec<String> = vocab.into_iter().take(30).map(|(t, _)| t).collect();
+
+                let prompt = tag_prompt(&it, &a.state.taxonomy, &vocab);
+                let image = std::path::PathBuf::from(format!(
+                    "{}\\{}",
+                    root.trim_end_matches('\\'),
+                    it.preview.replace('/', "\\")
+                ));
+                (key, model, base, prompt, image, it.slug.clone(), it.code.clone())
+            };
+
+            let (key, model, base, prompt, image, slug, code) = payload;
+            let Some(u) = weak.upgrade() else {
+                return;
+            };
+            if key.is_empty() {
+                u.set_deepseek_state("no key".into());
+                app(|a| show_toast(&u, a, "Set a DeepSeek API key in Settings first", "error"));
+                return;
+            }
+            if !image.exists() {
+                app(|a| show_toast(&u, a, &format!("No preview image for {slug}"), "error"));
+                return;
+            }
+
+            u.set_ai_busy(true);
+            let ui = weak.clone();
+            std::thread::spawn(move || {
+                let result = deepseek_tag_call(&base, &key, &model, &prompt, &image);
+                let _ = slint::invoke_from_event_loop(move || {
+                    let Some(u) = ui.upgrade() else {
+                        return;
+                    };
+                    u.set_ai_busy(false);
+                    let result = match result {
+                        Ok(v) => v,
+                        Err(e) => {
+                            app(|a| show_toast(&u, a, &format!("AI tagging failed: {e}"), "error"));
+                            return;
+                        }
+                    };
+
+                    let mut tags: Vec<String> = result["tags"]
+                        .as_array()
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|t| t.as_str())
+                                .map(|t| t.trim().to_lowercase())
+                                .filter(|t| !t.is_empty())
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    tags.dedup();
+                    let l1 = result["l1"].as_str().unwrap_or("").to_string();
+                    let l2 = result["l2"].as_str().unwrap_or("").to_string();
+
+                    app(|a| {
+                        let mut added = 0usize;
+                        if let Some(e) = a.edit.as_mut() {
+                            for t in tags.iter() {
+                                if !e.tags.iter().any(|x| x == t) {
+                                    e.tags.push(t.clone());
+                                    added += 1;
+                                }
+                            }
+                        }
+                        let all = a.edit.as_ref().map(|e| e.tags.clone()).unwrap_or_default();
+                        let dirty = edit_dirty(&a);
+                        u.set_edit_tags(to_string_model(&all));
+                        u.set_edit_dirty(dirty);
+                        show_toast(
+                            &u,
+                            a,
+                            &format!(
+                                "{code}: +{added} tags · {l1}{}  (review, then Save)",
+                                if l2.is_empty() { String::new() } else { format!("/{l2}") }
+                            ),
+                            "ok",
+                        );
+                    });
+                });
+            });
+        });
+    }
+    // --- cart: batch AI tagging -------------------------------------------
+    {
+        let app_rc = app_rc.clone();
+        let weak = ui.as_weak();
+        ui.on_cart_ai_tag(move || {
+            let (jobs, key, model, base, root) = {
+                let Ok(a) = app_rc.try_borrow() else {
+                    return;
+                };
+                let key = a.store.deepseek_api_key.trim().to_string();
+                let model = a.store.deepseek_model.trim().to_string();
+                let base = a.store.deepseek_base.trim().to_string();
+                let root = a.lib.root.clone();
+
+                let mut counts: std::collections::HashMap<String, usize> =
+                    std::collections::HashMap::new();
+                for item in &a.state.items {
+                    for t in &item.tags {
+                        *counts.entry(t.clone()).or_insert(0) += 1;
+                    }
+                }
+                let mut vocab: Vec<(String, usize)> = counts.into_iter().collect();
+                vocab.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+                let vocab: Vec<String> = vocab.into_iter().take(30).map(|(t, _)| t).collect();
+
+                let mut jobs = Vec::new();
+                for code in a.state.cart.clone() {
+                    let Some(idx) = a.state.index_of(&code) else {
+                        continue;
+                    };
+                    let item = a.state.items[idx].clone();
+                    if item.preview.is_empty() {
+                        continue;
+                    }
+                    let prompt = tag_prompt(&item, &a.state.taxonomy, &vocab);
+                    let image = std::path::PathBuf::from(format!(
+                        "{}\\{}",
+                        root.trim_end_matches('\\'),
+                        item.preview.replace('/', "\\")
+                    ));
+                    jobs.push((code, prompt, image, item.l1.clone(), item.l2.clone(), item.tags.clone()));
+                }
+                (jobs, key, model, base, root)
+            };
+
+            let Some(u) = weak.upgrade() else {
+                return;
+            };
+            if jobs.is_empty() {
+                app(|a| show_toast(&u, a, "Cart is empty (or its items have no preview)", "error"));
+                return;
+            }
+            if key.is_empty() {
+                app(|a| show_toast(&u, a, "Set a DeepSeek API key in Settings first", "error"));
+                return;
+            }
+
+            u.set_ai_busy(true);
+            let ui = weak.clone();
+            std::thread::spawn(move || {
+                let lib = Library::new(&root);
+                let total = jobs.len();
+                let mut ok = 0usize;
+                let mut failed = 0usize;
+                let mut last_error = String::new();
+
+                for (n, (code, prompt, image, l1, l2, current)) in jobs.into_iter().enumerate() {
+                    let progress = ui.clone();
+                    let label = code.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(u) = progress.upgrade() {
+                            u.set_status_text(format!("AI tags {}/{} · {label}", n + 1, total).into());
+                        }
+                    });
+
+                    match deepseek_tag_call(&base, &key, &model, &prompt, &image) {
+                        Ok(doc) => {
+                            let mut tags = current.clone();
+                            if let Some(arr) = doc["tags"].as_array() {
+                                for t in arr {
+                                    if let Some(t) = t.as_str() {
+                                        let tag = t.trim().to_lowercase();
+                                        if !tag.is_empty() && !tags.contains(&tag) {
+                                            tags.push(tag);
+                                        }
+                                    }
+                                }
+                            }
+                            match lib.edit_asset(&code, &l1, &l2, &tags) {
+                                Ok(updated) => {
+                                    ok += 1;
+                                    let ui = ui.clone();
+                                    let _ = slint::invoke_from_event_loop(move || {
+                                        let Some(u) = ui.upgrade() else {
+                                            return;
+                                        };
+                                        app(|a| {
+                                            if let Some(pos) = a.state.index_of(&code) {
+                                                a.state.items[pos] = updated.clone();
+                                                let mut row = asset_row(&updated);
+                                                if let Some(old) = a.items.row_data(pos) {
+                                                    row.thumb = old.thumb;
+                                                    row.in_cart = old.in_cart;
+                                                }
+                                                a.items.set_row_data(pos, row);
+                                            }
+                                            rebuild_rows(&u, a);
+                                        });
+                                    });
+                                }
+                                Err(e) => {
+                                    failed += 1;
+                                    if last_error.is_empty() {
+                                        last_error = format!("{code}: {e}");
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            failed += 1;
+                            if last_error.is_empty() {
+                                last_error = format!("{code}: {e}");
+                            }
+                        }
+                    }
+                }
+
+                let _ = slint::invoke_from_event_loop(move || {
+                    let Some(u) = ui.upgrade() else {
+                        return;
+                    };
+                    u.set_ai_busy(false);
+                    u.set_status_text(format!("AI tags: {ok}/{total} tagged").into());
+                    app(|a| {
+                        let message = if failed == 0 {
+                            format!("AI tagged {ok} asset(s)")
+                        } else {
+                            format!("AI tagged {ok}, {failed} failed: {last_error}")
+                        };
+                        show_toast(&u, a, &message, if failed == 0 { "ok" } else { "error" });
+                    });
+                });
+            });
+        });
+    }
+    {
+        let weak = ui.as_weak();
+        ui.on_deepseek_test(move || {
+            let store = app(|a| a.store.clone()).unwrap_or_default();
+            let Some(u) = weak.upgrade() else {
+                return;
+            };
+            let key = u.get_deepseek_key().trim().to_string();
+            let model = {
+                let m = u.get_deepseek_model().trim().to_string();
+                if m.is_empty() { "deepseek-flash".to_string() } else { m }
+            };
+            let base = if store.deepseek_base.trim().is_empty() {
+                "https://api.deepseek.com".to_string()
+            } else {
+                store.deepseek_base.clone()
+            };
+            if key.is_empty() {
+                u.set_deepseek_state("no key".into());
+                return;
+            }
+            u.set_deepseek_state("testing…".into());
+            let ui = weak.clone();
+            std::thread::spawn(move || {
+                let result = deepseek_ping(&base, &key, &model);
+                let _ = slint::invoke_from_event_loop(move || {
+                    let Some(u) = ui.upgrade() else {
+                        return;
+                    };
+                    match result {
+                        Ok(reply) => u.set_deepseek_state(format!("ok · {reply}").into()),
+                        Err(e) => u.set_deepseek_state(format!("failed: {}", e.chars().take(40).collect::<String>()).into()),
+                    }
+                });
+            });
         });
     }
     {
@@ -4039,11 +4436,19 @@ fn wire_callbacks(ui: &AppWindow, app_rc: &Rc<RefCell<App>>, drag: &Rc<WindowDra
 
     // --- settings sheet ----------------------------------------------------
     {
+        let weak = ui.as_weak();
         ui.on_settings_changed(move || {
             // Marks the store dirty with a short debounce: a slider drag fires
             // this on every pointer move, and glass_step writes the JSON once
             // the value settles (and re-blurs the stored shot on its next tick).
-            app(|a| a.store_pending_at = Some(Instant::now() + Duration::from_millis(650)));
+            let ui = weak.clone();
+            app(move |a| {
+                if let Some(u) = ui.upgrade() {
+                    a.store.deepseek_api_key = u.get_deepseek_key().to_string();
+                    a.store.deepseek_model = u.get_deepseek_model().to_string();
+                }
+                a.store_pending_at = Some(Instant::now() + Duration::from_millis(650));
+            });
         });
     }
     {

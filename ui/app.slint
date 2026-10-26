@@ -121,6 +121,12 @@ export component AppWindow inherits Window {
     in-out property <bool>           delete-armed: false;
     in-out property <string>         edit-tag-input: "";
 
+    // DeepSeek AI tagging (settings sheet + detail panel button)
+    in-out property <string>         deepseek-key: "";
+    in-out property <string>         deepseek-model: "deepseek-flash";
+    in-out property <string>         deepseek-state: "";
+    in-out property <bool>           ai-busy: false;
+
     in property <int>                rig-clip-index: 0;
     in property <bool>               rig-playing: false;
     in property <bool>               rig-bones: false;
@@ -207,6 +213,7 @@ export component AppWindow inherits Window {
     callback detail-set-l2(int);
     callback detail-add-tag(string);
     callback detail-remove-tag(string);
+    callback detail-ai-tag();
     callback detail-save();
     callback detail-select-slide(int);
     callback detail-delete();
@@ -215,6 +222,7 @@ export component AppWindow inherits Window {
     callback detail-unity();
     callback detail-painter();
     callback check-bridge(string);
+    callback deepseek-test();
     callback blender-open-dialog();
     callback blender-close();
     callback blender-config(string, string);
@@ -236,6 +244,7 @@ export component AppWindow inherits Window {
     callback cart-select-all-filtered();
     callback cart-export();
     callback cart-open-detail(string);
+    callback cart-ai-tag();
     callback rig-toggle-play();
     callback rig-restart();
     callback rig-reset-view();
@@ -1295,6 +1304,14 @@ export component AppWindow inherits Window {
                                         }
                                     }
                                     Btn { label: "Add"; width: 54px; height: 34px; font-size: 12px; clicked => { root.detail-add-tag(root.edit-tag-input); } }
+                                    Btn {
+                                        label: "AI";
+                                        width: 46px;
+                                        height: 34px;
+                                        font-size: 12px;
+                                        enabled: !root.ai-busy;
+                                        clicked => { root.detail-ai-tag(); }
+                                    }
                                 }
 
                                 Rectangle { height: 12px; }
@@ -1400,7 +1417,7 @@ export component AppWindow inherits Window {
             border-color: Theme.border-strong;
             TouchArea { }
 
-            property <length> foot-h: 158px;
+            property <length> foot-h: 214px;
 
             // ---- head (fixed) ----
             Rectangle {
@@ -1515,6 +1532,12 @@ export component AppWindow inherits Window {
                         clicked => { root.cart-export(); }
                     }
                     Btn { label: "Add all filtered"; height: 36px; clicked => { root.cart-select-all-filtered(); } }
+                    Btn {
+                        label: "AI tags (DeepSeek)";
+                        height: 36px;
+                        enabled: root.cart-count > 0 && !root.ai-busy;
+                        clicked => { root.cart-ai-tag(); }
+                    }
                     Btn { label: "Clear"; danger: true; height: 36px; enabled: root.cart-count > 0; clicked => { root.cart-clear(); } }
                 }
             }
@@ -1801,7 +1824,7 @@ export component AppWindow inherits Window {
             x: (root.width - self.width) / 2;
             y: (root.height - self.height) / 2;
             width: min(root.width - 32px, 520px);
-            height: 434px;
+            height: 620px;
             background: Theme.surface;
             border-width: 1px;
             border-color: Theme.border-strong;
@@ -1931,6 +1954,97 @@ export component AppWindow inherits Window {
                     color: Theme.text-faint;
                     wrap: word-wrap;
                     height: 42px;
+                }
+
+                HLine { }
+
+                VerticalLayout {
+                    spacing: 6px;
+                    HorizontalLayout {
+                        height: 22px;
+                        Text {
+                            text: "DEEPSEEK · AI TAGGING";
+                            font-family: "Cascadia Mono";
+                            font-size: 10px;
+                            letter-spacing: 1.2px;
+                            color: Theme.text-faint;
+                            horizontal-stretch: 1;
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            text: root.deepseek-state;
+                            font-family: "Arial";
+                            font-size: 11px;
+                            color: Theme.text-dim;
+                            vertical-alignment: center;
+                        }
+                    }
+                    HorizontalLayout {
+                        height: 34px;
+                        spacing: 8px;
+                        Rectangle {
+                            horizontal-stretch: 1;
+                            height: parent.height;
+                            background: Theme.surface-2;
+                            border-width: 1px;
+                            border-color: Theme.border;
+                            border-radius: 6px;
+                            TextInput {
+                                x: 10px; y: 0px;
+                                width: parent.width - 20px;
+                                height: parent.height;
+                                text <=> root.deepseek-key;
+                                input-type: password;
+                                color: Theme.text;
+                                font-family: "Arial";
+                                font-size: 12px;
+                                single-line: true;
+                                vertical-alignment: center;
+                                edited => { root.settings-changed(); }
+                            }
+                        }
+                        Btn { label: "Test"; width: 70px; height: 34px; clicked => { root.deepseek-test(); } }
+                    }
+                    HorizontalLayout {
+                        height: 34px;
+                        spacing: 8px;
+                        Text {
+                            text: "Model";
+                            width: 60px;
+                            font-family: "Arial";
+                            font-size: 12px;
+                            color: Theme.text-dim;
+                            vertical-alignment: center;
+                        }
+                        Rectangle {
+                            horizontal-stretch: 1;
+                            height: parent.height;
+                            background: Theme.surface-2;
+                            border-width: 1px;
+                            border-color: Theme.border;
+                            border-radius: 6px;
+                            TextInput {
+                                x: 10px; y: 0px;
+                                width: parent.width - 20px;
+                                height: parent.height;
+                                text <=> root.deepseek-model;
+                                color: Theme.text;
+                                font-family: "Arial";
+                                font-size: 12px;
+                                single-line: true;
+                                vertical-alignment: center;
+                                edited => { root.settings-changed(); }
+                            }
+                        }
+                    }
+                    Text {
+                        text: "Key lives in store.json and is shared with the Blender add-on and the MCP server. deepseek-flash = V4.1-Flash and accepts the preview image.";
+                        font-family: "Arial";
+                        font-size: 11px;
+                        color: Theme.text-faint;
+                        wrap: word-wrap;
+                        height: 30px;
+                    }
                 }
 
                 Rectangle { vertical-stretch: 1; }

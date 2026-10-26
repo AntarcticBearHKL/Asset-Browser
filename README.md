@@ -5,7 +5,7 @@ A native Windows desktop browser for a **local 3D asset library**, built with
 with a single self-contained binary: no browser, no dev server, no Python relay
 processes.
 
-**Version 0.02** · repo: <https://github.com/AntarcticBearHKL/Asset-Browser>
+**Version 0.04** · repo: <https://github.com/AntarcticBearHKL/Asset-Browser>
 
 ## What it does
 
@@ -19,7 +19,7 @@ selected assets off to DCC tools.
 
 ## Install (pre-built)
 
-1. Download `AssetBrowser-v0.03-win64.zip` from the
+1. Download `AssetBrowser-v0.04-win64.zip` from the
    [Releases](https://github.com/AntarcticBearHKL/Asset-Browser/releases) page.
 2. Extract anywhere and run `asset-library-desktop.exe`.
 3. Needs a 64-bit Windows 10/11 and the Microsoft Visual C++ 2015-2022 Redistributable
@@ -153,6 +153,7 @@ ui/theme.slint       design tokens (Theme) + the Slint/Rust contract structs
 ui/components.slint  every reusable component (Card, Btn, Pick, dialogs, …)
 ui/app.slint         AppWindow: properties, callbacks, and the page composition
 tools/screenshot.ps1 dev tool: render any surface to a PNG for visual QA
+mcp/                 agent-facing MCP server (Python/uv; same library + cart)
 docs/archive/        historical planning documents (see the banner in each)
 ```
 
