@@ -66,7 +66,7 @@ export component AppWindow inherits Window {
     in property <int>        count-materials: 0;
     in property <int>        count-rigs: 0;
     in-out property <int>    tab: 0;
-    property <length>        card-w: max(168px, (root.width - 92px) / 6);
+    property <length>        card-w: max(120px, (root.width - 32px - (root.columns - 1) * 12px) / root.columns);
     property <length>        card-h: root.card-w + 108px;
     in-out property <string> count-label: "";
     in-out property <string> query: "";
@@ -89,12 +89,16 @@ export component AppWindow inherits Window {
     // Parallel to `page-sizes` (same length/order), same values as strings:
     // the pick popup's `for` list is typed [string], so it needs a string list.
     in property <[string]>   page-size-labels: [];
+    // Cards per row (fewer columns = bigger previews).
+    in property <int>        columns: 6;
+    in property <[int]>      column-options: [];
+    in property <[string]>   column-labels: [];
     in-out property <length> grid-scroll: 0px;
 
     in-out property <bool>   page-edit-open: false;
     in-out property <string> page-edit-text: "";
 
-    in-out property <int> pick-open: -1; // 0 l1, 1 l2, 2 sort, 3 style, 4 edit-l1, 5 edit-l2, 6 page-size
+    in-out property <int> pick-open: -1; // 0 l1, 1 l2, 2 sort, 3 style, 4 edit-l1, 5 edit-l2, 6 page-size, 7 columns
     property <string> l1-value: root.l1-options.length > 0 && root.l1-index >= 0 && root.l1-index < root.l1-options.length ? root.l1-options[root.l1-index] : "All categories";
     property <string> l2-value: root.l2-options.length > 0 && root.l2-index >= 0 && root.l2-index < root.l2-options.length ? root.l2-options[root.l2-index] : "All subcategories";
     property <string> sort-value: root.sort-index >= 0 && root.sort-index < root.sort-options.length ? root.sort-options[root.sort-index] : "";
@@ -166,6 +170,7 @@ export component AppWindow inherits Window {
         else if root.pick-open == 4 { root.detail-set-l1(i); }
         else if root.pick-open == 5 { root.detail-set-l2(i); }
         else if root.pick-open == 6 { root.set-page-size(root.page-sizes[i]); }
+        else if root.pick-open == 7 { root.set-columns(root.column-options[i]); }
         root.pick-open = -1;
     }
     function stage-active() -> bool { return root.detail-kind == "rig"; }
@@ -195,10 +200,10 @@ export component AppWindow inherits Window {
     callback page-prev();
     callback page-next();
     callback page-last();
-    callback page-wheel(int);
     callback page-goto(int);
     callback page-goto-text(string);
     callback set-page-size(int);
+    callback set-columns(int);
     callback refresh-all();
     callback ensure-image(int);
     callback card-cart(int);
@@ -514,6 +519,7 @@ export component AppWindow inherits Window {
                     clicked => { root.refresh-all(); }
                 }
                 pagesize-pick := Pick { width: 120px; value: "\{root.page-size} / page"; open: root.pick-open == 6; clicked => { root.pick-open = root.pick-open == 6 ? -1 : 6; } }
+                columns-pick := Pick { width: 104px; value: "\{root.columns} / row"; open: root.pick-open == 7; clicked => { root.pick-open = root.pick-open == 7 ? -1 : 7; } }
                 Rectangle { horizontal-stretch: 1; }
                 Text {
                     text: root.count-label;
@@ -560,20 +566,6 @@ export component AppWindow inherits Window {
         Rectangle {
             vertical-stretch: 1;
             background: transparent;
-            // Wheel over the grid flips one page per notch. Declared *behind*
-            // the cards: clicks still reach them, and the list keeps its own
-            // scrolling; this only sees events the cards/list did not use.
-            // Slint reports a Windows wheel-down as a negative delta.
-            TouchArea {
-                scroll-event(ev) => {
-                    if (ev.delta-y < 0) {
-                        root.page-wheel(1);
-                    } else if (ev.delta-y > 0) {
-                        root.page-wheel(-1);
-                    }
-                    return accept;
-                }
-            }
             if root.rows.length > 0 : ListView {
                 content-y <=> root.grid-scroll;
                 for row in root.rows : HorizontalLayout {
@@ -669,6 +661,34 @@ export component AppWindow inherits Window {
                         blender => { root.card-blender(row.f); }
                         unity => { root.card-unity(row.f); }
                         painter => { root.card-painter(row.f); }
+                        tag(text) => { root.card-tag(text); }
+                    }
+                    if row.n >= 7 : Card {
+                        width: root.card-w;
+                        code: root.items[row.g].code; slug: root.items[row.g].slug; thumb: root.items[row.g].thumb;
+                        t1: root.items[row.g].tag1; t2: root.items[row.g].tag2; t3: root.items[row.g].tag3;
+                        in-cart: root.items[row.g].in-cart; kind: root.items[row.g].kind;
+                        init => { root.ensure-image(row.g); }
+                        open => { root.open-detail(row.g); }
+                        cart => { root.card-cart(row.g); }
+                        copy => { root.card-copy(row.g); }
+                        blender => { root.card-blender(row.g); }
+                        unity => { root.card-unity(row.g); }
+                        painter => { root.card-painter(row.g); }
+                        tag(text) => { root.card-tag(text); }
+                    }
+                    if row.n >= 8 : Card {
+                        width: root.card-w;
+                        code: root.items[row.h].code; slug: root.items[row.h].slug; thumb: root.items[row.h].thumb;
+                        t1: root.items[row.h].tag1; t2: root.items[row.h].tag2; t3: root.items[row.h].tag3;
+                        in-cart: root.items[row.h].in-cart; kind: root.items[row.h].kind;
+                        init => { root.ensure-image(row.h); }
+                        open => { root.open-detail(row.h); }
+                        cart => { root.card-cart(row.h); }
+                        copy => { root.card-copy(row.h); }
+                        blender => { root.card-blender(row.h); }
+                        unity => { root.card-unity(row.h); }
+                        painter => { root.card-painter(row.h); }
                         tag(text) => { root.card-tag(text); }
                     }
                 }
@@ -1748,7 +1768,7 @@ export component AppWindow inherits Window {
     }
     // ============ pick popup (above the grid) ============
     // ============ toolbar pick popup (0..3) ============
-    if (root.pick-open >= 0 && root.pick-open <= 3) || root.pick-open == 6 : Rectangle {
+    if (root.pick-open >= 0 && root.pick-open <= 3) || root.pick-open == 6 || root.pick-open == 7 : Rectangle {
         width: root.width;
         height: root.height;
         background: transparent;
@@ -1758,20 +1778,24 @@ export component AppWindow inherits Window {
              : root.pick-open == 1 ? l2-pick.absolute-position.x
              : root.pick-open == 2 ? sort-pick.absolute-position.x
              : root.pick-open == 3 ? style-pick.absolute-position.x
-             : pagesize-pick.absolute-position.x;
+             : root.pick-open == 6 ? pagesize-pick.absolute-position.x
+             : columns-pick.absolute-position.x;
             y: (root.pick-open == 0 ? l1-pick.absolute-position.y
               : root.pick-open == 1 ? l2-pick.absolute-position.y
               : root.pick-open == 2 ? sort-pick.absolute-position.y
               : root.pick-open == 3 ? style-pick.absolute-position.y
-              : pagesize-pick.absolute-position.y) + 38px;
+              : root.pick-open == 6 ? pagesize-pick.absolute-position.y
+              : columns-pick.absolute-position.y) + 38px;
             width: (root.pick-open == 2 || root.pick-open == 3) ? 130px
                  : root.pick-open == 6 ? 120px
+                 : root.pick-open == 7 ? 104px
                  : 150px;
             height: ((root.pick-open == 0 ? root.l1-options.length
                     : root.pick-open == 1 ? root.l2-options.length
                     : root.pick-open == 2 ? root.sort-options.length
                     : root.pick-open == 3 ? root.style-options.length
-                    : root.page-sizes.length) * 32px) + 8px;
+                    : root.pick-open == 6 ? root.page-sizes.length
+                    : root.column-options.length) * 32px) + 8px;
             background: Theme.surface;
             border-width: 1px;
             border-color: Theme.border-strong;
@@ -1786,7 +1810,8 @@ export component AppWindow inherits Window {
                            : root.pick-open == 1 ? root.l2-options
                            : root.pick-open == 2 ? root.sort-options
                            : root.pick-open == 3 ? root.style-options
-                           : root.page-size-labels) : Rectangle {
+                           : root.pick-open == 6 ? root.page-size-labels
+                           : root.column-labels) : Rectangle {
                     height: 32px;
                     background: row-ta.has-hover ? Theme.accent : transparent;
                     animate background { duration: 110ms; easing: ease-out; }

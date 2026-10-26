@@ -85,6 +85,8 @@ pub struct AppState {
     pub page: usize,
     /// Cards per page (always one of `page_size_options()`).
     pub page_size: usize,
+    /// Cards per row (always one of `column_options()`).
+    pub columns: usize,
     /// Codes, in insertion order.
     pub cart: Vec<String>,
     pub taxonomy: Taxonomy,
@@ -103,6 +105,7 @@ impl AppState {
             sort: SortKey::Code,
             page: 0,
             page_size: 12,
+            columns: 6,
             cart,
             taxonomy,
         };
@@ -213,6 +216,14 @@ impl AppState {
         self.page_size = size;
         self.page = first / size;
         self.clamp_page();
+    }
+
+    /// Change how many cards share a row (must be one of `column_options()`).
+    /// The page itself does not change; the grid only re-chunks it.
+    pub fn set_columns(&mut self, columns: usize) {
+        if column_options().iter().any(|&c| c as usize == columns) {
+            self.columns = columns;
+        }
     }
 
     /// Global index of the first item on the current page.
@@ -417,6 +428,11 @@ pub fn style_options() -> Vec<String> {
 
 pub fn page_size_options() -> Vec<i32> {
     vec![12, 24, 48, 96]
+}
+
+/// Cards per row. Fewer columns mean bigger previews.
+pub fn column_options() -> Vec<i32> {
+    vec![3, 4, 5, 6, 8]
 }
 
 fn sort_unique(v: &mut Vec<String>) {

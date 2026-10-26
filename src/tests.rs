@@ -10,7 +10,8 @@ use crate::model::{
     Item, Kind,
 };
 use crate::state::{
-    build_taxonomy, page_size_options, sort_options, style_options, AppState, SortKey, Taxonomy,
+    build_taxonomy, column_options, page_size_options, sort_options, style_options, AppState,
+    SortKey, Taxonomy,
 };
 
 const REAL_ROOT: &str = r"D:\3D Resource";
@@ -320,6 +321,11 @@ fn page_size_options_are_the_documented_set() {
 }
 
 #[test]
+fn column_options_are_the_documented_set() {
+    assert_eq!(column_options(), vec![3, 4, 5, 6, 8]);
+}
+
+#[test]
 fn page_count_rounds_up_and_never_hits_zero() {
     assert_eq!(models(0).page_count(), 1, "empty list still has one page");
     assert_eq!(models(12).page_count(), 1, "exact multiple");
@@ -377,6 +383,18 @@ fn set_page_size_keeps_the_first_visible_item() {
 }
 
 #[test]
+fn set_columns_accepts_only_the_documented_options() {
+    let mut s = models(10);
+    assert_eq!(s.columns, 6, "the grid starts at six per row");
+    s.set_columns(8);
+    assert_eq!(s.columns, 8);
+    s.set_columns(3);
+    assert_eq!(s.columns, 3);
+    s.set_columns(7);
+    assert_eq!(s.columns, 3, "an unlisted column count is ignored");
+}
+
+#[test]
 fn page_slice_and_rows_chunk_thirteen_items_as_6_6_1() {
     let all: Vec<usize> = (0..13).collect();
 
@@ -384,8 +402,8 @@ fn page_slice_and_rows_chunk_thirteen_items_as_6_6_1() {
     assert_eq!(crate::page_slice(&all, 12, 12), &all[12..13]);
     assert!(crate::page_slice(&all, 24, 12).is_empty(), "past the last page");
 
-    let page0 = crate::rows_from_slice(crate::page_slice(&all, 0, 12));
-    let page1 = crate::rows_from_slice(crate::page_slice(&all, 12, 12));
+    let page0 = crate::rows_from_slice(crate::page_slice(&all, 0, 12), 6);
+    let page1 = crate::rows_from_slice(crate::page_slice(&all, 12, 12), 6);
     let ns: Vec<i32> = page0.iter().chain(page1.iter()).map(|r| r.n).collect();
     assert_eq!(ns, vec![6, 6, 1]);
     assert_eq!(page0.len(), 2);
@@ -394,6 +412,26 @@ fn page_slice_and_rows_chunk_thirteen_items_as_6_6_1() {
     // Rows carry GLOBAL indices; the last slot is the -1 filler.
     assert_eq!((page0[0].a, page0[0].f, page0[0].n), (0, 5, 6));
     assert_eq!((page1[0].a, page1[0].b, page1[0].n), (12, -1, 1));
+}
+
+#[test]
+fn rows_honour_the_column_count() {
+    let all: Vec<usize> = (0..10).collect();
+
+    // Three per row: 3, 3, 3, 1.
+    let rows3 = crate::rows_from_slice(&all, 3);
+    assert_eq!(
+        rows3.iter().map(|r| r.n).collect::<Vec<_>>(),
+        vec![3, 3, 3, 1]
+    );
+    assert_eq!((rows3[0].a, rows3[0].c, rows3[0].n), (0, 2, 3));
+    assert_eq!(rows3[3].b, -1, "the last row only has one real slot");
+
+    // Eight per row: 8, 2, with slots g/h only filled on a full row.
+    let rows8 = crate::rows_from_slice(&all, 8);
+    assert_eq!(rows8.iter().map(|r| r.n).collect::<Vec<_>>(), vec![8, 2]);
+    assert_eq!((rows8[0].a, rows8[0].h, rows8[0].n), (0, 7, 8));
+    assert_eq!((rows8[1].a, rows8[1].b, rows8[1].h), (8, 9, -1));
 }
 
 /* ------------------------------ export.rs ------------------------------- */

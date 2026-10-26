@@ -34,7 +34,7 @@ use slint::{ComponentHandle, Model, ModelRc, Timer, TimerMode, VecModel, Weak};
 use bridge::Dot;
 use library::Library;
 use model::{preview_badge, slide_label, spec_pairs, Dims, Item, Kind};
-use state::{build_taxonomy, page_size_options, sort_options, style_options, AppState};
+use state::{build_taxonomy, column_options, page_size_options, sort_options, style_options, AppState};
 
 /// Asset library root (fixed data source, see PORT_SPEC §1.4).
 pub const ROOT: &str = r"D:\3D Resource";
@@ -132,9 +132,6 @@ struct App {
     /// Set when the settings change; the store is written once a slider drag
     /// has settled instead of once per pointer move.
     store_pending_at: Option<std::time::Instant>,
-    /// Slint delivers a physical wheel notch as a burst of smooth-scroll
-    /// events; these gate fellow-travellers to one action per gesture.
-    page_wheel_ready: std::time::Instant,
     rig_zoom_ready: std::time::Instant,
 }
 
@@ -292,9 +289,12 @@ fn page_slice(all: &[usize], start: usize, page_size: usize) -> &[usize] {
     &all[start..end]
 }
 
-/// Chunk a page's global indices into `GridRow`s of at most six cards.
-fn rows_from_slice(slice: &[usize]) -> Vec<GridRow> {
-    let mut rows: Vec<GridRow> = Vec::with_capacity(slice.len() / 6 + 1);
+/// Chunk a page's global indices into `GridRow`s of at most `columns` cards.
+/// `columns` is one of `column_options()` (3/4/5/6/8); the struct has eight
+/// slots, and `n` tells the UI how many of them are real.
+fn rows_from_slice(slice: &[usize], columns: usize) -> Vec<GridRow> {
+    let columns = columns.clamp(1, 8);
+    let mut rows: Vec<GridRow> = Vec::with_capacity(slice.len().div_ceil(columns));
     let mut k = 0usize;
     while k < slice.len() {
         let remaining = slice.len() - k;
@@ -312,9 +312,11 @@ fn rows_from_slice(slice: &[usize]) -> Vec<GridRow> {
             d: slot(3),
             e: slot(4),
             f: slot(5),
-            n: remaining.min(6) as i32,
+            g: slot(6),
+            h: slot(7),
+            n: remaining.min(columns) as i32,
         });
-        k += 6;
+        k += columns;
     }
     rows
 }
@@ -322,7 +324,10 @@ fn rows_from_slice(slice: &[usize]) -> Vec<GridRow> {
 fn rebuild_rows(ui: &AppWindow, a: &App) {
     let all = a.state.filtered();
     let slice = page_slice(&all, a.state.first_item_on_page(), a.state.page_size);
-    ui.set_rows(ModelRc::new(VecModel::from(rows_from_slice(slice))));
+    ui.set_rows(ModelRc::new(VecModel::from(rows_from_slice(
+        slice,
+        a.state.columns,
+    ))));
 }
 
 fn rebuild_cart(ui: &AppWindow, a: &App) {
@@ -352,6 +357,7 @@ fn sync_view(ui: &AppWindow, a: &App) {
     ui.set_page(a.state.page as i32);
     ui.set_page_count(a.state.page_count() as i32);
     ui.set_page_size(a.state.page_size as i32);
+    ui.set_columns(a.state.columns as i32);
     rebuild_rows(ui, a);
 }
 
@@ -401,6 +407,10 @@ fn sync_all(ui: &AppWindow, a: &App) {
     ui.set_page_sizes(to_int_model(&page_size_options()));
     ui.set_page_size_labels(to_string_model(
         &page_size_options().iter().map(|n| n.to_string()).collect::<Vec<_>>(),
+    ));
+    ui.set_column_options(to_int_model(&column_options()));
+    ui.set_column_labels(to_string_model(
+        &column_options().iter().map(|n| n.to_string()).collect::<Vec<_>>(),
     ));
     ui.set_sort_index(a.state.sort.index());
     ui.set_style_index(if a.state.style_textured_only { 1 } else { 0 });
@@ -2312,7 +2322,6 @@ fn main() -> Result<(), slint::PlatformError> {
         glass_last_origin: None,
         glass_timer: Timer::default(),
         store_pending_at: None,
-        page_wheel_ready: std::time::Instant::now(),
         rig_zoom_ready: std::time::Instant::now(),
     }));
     APP.with(|cell| {
@@ -2647,34 +2656,6 @@ fn wire_callbacks(ui: &AppWindow, app_rc: &Rc<RefCell<App>>, drag: &Rc<WindowDra
     {
         let app_rc = app_rc.clone();
         let weak = ui.as_weak();
-        ui.on_page_wheel(move |direction| {
-            if direction == 0 {
-                return;
-            }
-            if let Ok(mut a) = app_rc.try_borrow_mut() {
-                // One physical notch arrives as a burst of smooth-scroll
-                // events: one page per gesture is what the hand expects.
-                let now = Instant::now();
-                if now < a.page_wheel_ready {
-                    return;
-                }
-                a.page_wheel_ready = now + Duration::from_millis(220);
-                let last = a.state.page_count().saturating_sub(1);
-                if direction > 0 {
-                    a.state.page = (a.state.page + 1).min(last);
-                } else {
-                    a.state.page = a.state.page.saturating_sub(1);
-                }
-                if let Some(u) = weak.upgrade() {
-                    sync_view(&u, &a);
-                    u.set_grid_scroll(0.0);
-                }
-            }
-        });
-    }
-    {
-        let app_rc = app_rc.clone();
-        let weak = ui.as_weak();
         ui.on_page_last(move || {
             if let Ok(mut a) = app_rc.try_borrow_mut() {
                 a.state.page = a.state.page_count() - 1;
@@ -2705,6 +2686,19 @@ fn wire_callbacks(ui: &AppWindow, app_rc: &Rc<RefCell<App>>, drag: &Rc<WindowDra
         ui.on_set_page_size(move |size| {
             if let Ok(mut a) = app_rc.try_borrow_mut() {
                 a.state.set_page_size(size.max(0) as usize);
+                if let Some(u) = weak.upgrade() {
+                    sync_view(&u, &a);
+                    u.set_grid_scroll(0.0);
+                }
+            }
+        });
+    }
+    {
+        let app_rc = app_rc.clone();
+        let weak = ui.as_weak();
+        ui.on_set_columns(move |columns| {
+            if let Ok(mut a) = app_rc.try_borrow_mut() {
+                a.state.set_columns(columns.max(0) as usize);
                 if let Some(u) = weak.upgrade() {
                     sync_view(&u, &a);
                     u.set_grid_scroll(0.0);
