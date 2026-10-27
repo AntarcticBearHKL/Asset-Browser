@@ -53,6 +53,7 @@ export component Btn inherits Rectangle {
     in property <string> label: "";
     in property <bool> primary: false;
     in property <bool> danger: false;
+    in property <bool> danger-fill: false;
     in property <bool> enabled: true;
     in property <bool> mono: false;
     in property <length> font-size: 13px;
@@ -60,9 +61,12 @@ export component Btn inherits Rectangle {
     min-height: 32px;
     border-radius: 6px;
     border-width: 1px;
-    border-color: root.primary ? Theme.accent : (ta.has-hover ? Theme.border-strong : Theme.border);
+    border-color: root.danger-fill ? Theme.danger
+                 : root.primary ? Theme.accent
+                 : (ta.has-hover ? Theme.border-strong : Theme.border);
     opacity: root.enabled ? 1 : 0.4;
-    background: root.primary ? (ta.pressed ? Theme.accent.darker(10%) : Theme.accent)
+    background: root.danger-fill ? (ta.pressed ? Theme.danger.darker(10%) : Theme.danger)
+              : root.primary ? (ta.pressed ? Theme.accent.darker(10%) : Theme.accent)
               : (ta.has-hover ? Theme.hover : transparent);
     transform-scale-x: ta.pressed ? 0.97 : 1.0;
     transform-scale-y: ta.pressed ? 0.97 : 1.0;
@@ -82,7 +86,9 @@ export component Btn inherits Rectangle {
         alignment: center;
         Text {
             text: root.label;
-            color: root.primary ? Theme.accent-fg : (root.danger ? Theme.danger : Theme.text);
+            color: root.danger-fill ? #FFFFFF
+                 : root.primary ? Theme.accent-fg
+                 : (root.danger ? Theme.danger : Theme.text);
             font-family: root.mono ? "Cascadia Mono" : "Arial";
             font-size: root.font-size;
             horizontal-alignment: center;
@@ -279,11 +285,12 @@ export component TagChip inherits Rectangle {
         spacing: 5px;
         alignment: center;
         Text {
-            text: root.label.to-uppercase();
+            text: root.label;
             color: Theme.text-dim;
-            font-family: "Cascadia Mono";
-            font-size: 10px;
-            letter-spacing: 0.6px;
+            font-family: "Arial";
+            font-size: 11px;
+            font-weight: 500;
+            letter-spacing: 0.2px;
             vertical-alignment: center;
             overflow: elide;
         }
@@ -607,7 +614,7 @@ export component Card inherits Rectangle {
                     clicked => { root.blender(); }
                 }
                 Rectangle { horizontal-stretch: 1; }
-                if root.in-unity : HorizontalLayout {
+                HorizontalLayout {
                     height: 22px;
                     spacing: 4px;
                     alignment: center;
@@ -615,34 +622,16 @@ export component Card inherits Rectangle {
                         width: 8px;
                         height: 8px;
                         border-radius: 4px;
-                        background: Theme.ok;
+                        background: root.in-unity ? Theme.ok : Theme.text-faint;
                     }
                     Text {
                         text: "UNITY";
                         font-family: "Cascadia Mono";
                         font-size: 9px;
                         letter-spacing: 0.8px;
-                        color: Theme.ok;
+                        color: root.in-unity ? Theme.ok : Theme.text-faint;
                         vertical-alignment: center;
                     }
-                }
-            }
-        }
-        VerticalLayout {
-            spacing: 0px;
-            HLine { }
-            Rectangle {
-                height: 38px;
-                HorizontalLayout {
-                    padding-left: 12px;
-                    padding-right: 12px;
-                    padding-top: 8px;
-                    padding-bottom: 8px;
-                    spacing: 4px;
-                    alignment: start;
-                    if root.t1 != "" : TagChip { label: root.t1; clicked => { root.tag(root.t1); } }
-                    if root.t2 != "" : TagChip { label: root.t2; clicked => { root.tag(root.t2); } }
-                    if root.t3 != "" : TagChip { label: root.t3; clicked => { root.tag(root.t3); } }
                 }
             }
         }
@@ -734,8 +723,8 @@ export component SectionHead inherits Rectangle {
         clicked => { root.toggled(); }
     }
     HorizontalLayout {
-        padding-left: 8px;
-        padding-right: 8px;
+        padding-left: 0px;
+        padding-right: 0px;
         spacing: 8px;
         Text {
             text: root.label;

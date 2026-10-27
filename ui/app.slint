@@ -68,7 +68,7 @@ export component AppWindow inherits Window {
     in property <int>        count-rigs: 0;
     in-out property <int>    tab: 0;
     property <length>        card-w: max(120px, (root.width - 32px - (root.columns - 1) * 12px) / root.columns);
-    property <length>        card-h: root.card-w + 108px;
+    property <length>        card-h: root.card-w + 80px;
     in-out property <string> query: "";
     in property <[string]>   l1-options: [];
     in property <[string]>   l2-options: [];
@@ -1236,6 +1236,7 @@ export component AppWindow inherits Window {
                                     toggled => { root.specs-open = !root.specs-open; }
                                 }
                                 if root.specs-open : VerticalLayout {
+                                    padding-left: 10px;
                                     spacing: 2px;
                                     for s in root.spec : HorizontalLayout {
                                         height: 22px;
@@ -1271,6 +1272,7 @@ export component AppWindow inherits Window {
                                     toggled => { root.category-open = !root.category-open; }
                                 }
                                 if root.category-open : VerticalLayout {
+                                    padding-left: 10px;
                                     spacing: 8px;
                                     HorizontalLayout {
                                         height: 34px;
@@ -1302,8 +1304,8 @@ export component AppWindow inherits Window {
                                         height: 30px;
                                         Rectangle { horizontal-stretch: 1; }
                                         Btn {
-                                            label: root.edit-busy ? "Saving…" : "Save category";
-                                            width: 132px;
+                                            label: root.edit-busy ? "Saving…" : "Save";
+                                            width: 80px;
                                             height: 30px;
                                             font-size: 11px;
                                             enabled: root.edit-dirty && !root.edit-busy;
@@ -1321,6 +1323,7 @@ export component AppWindow inherits Window {
                                     toggled => { root.tags-open = !root.tags-open; }
                                 }
                                 if root.tags-open : VerticalLayout {
+                                    padding-left: 10px;
                                     spacing: 8px;
                                     tag-strip := Flickable {
                                         height: 30px;
@@ -1376,8 +1379,8 @@ export component AppWindow inherits Window {
                                         height: 30px;
                                         Rectangle { horizontal-stretch: 1; }
                                         Btn {
-                                            label: root.edit-busy ? "Saving…" : "Save tags";
-                                            width: 132px;
+                                            label: root.edit-busy ? "Saving…" : "Save";
+                                            width: 80px;
                                             height: 30px;
                                             font-size: 11px;
                                             enabled: root.edit-dirty && !root.edit-busy;
@@ -1409,8 +1412,8 @@ export component AppWindow inherits Window {
                             HorizontalLayout {
                                 height: 34px;
                                 spacing: 8px;
-                                Btn { label: "Refresh"; horizontal-stretch: 7; height: 34px; clicked => { root.detail-refresh(); } }
-                                Btn { label: root.delete-armed ? "Sure?" : "Delete"; danger: true; horizontal-stretch: 3; height: 34px; clicked => { root.detail-delete(); } }
+                                Btn { label: "Refresh"; horizontal-stretch: 8; height: 34px; clicked => { root.detail-refresh(); } }
+                                Btn { label: root.delete-armed ? "Sure?" : "Delete"; danger: true; danger-fill: true; horizontal-stretch: 2; height: 34px; clicked => { root.detail-delete(); } }
                             }
                         }
                     }
