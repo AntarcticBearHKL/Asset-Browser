@@ -1184,6 +1184,41 @@ export component AppWindow inherits Window {
                         height: parent.height;
                         spacing: 0px;
 
+                        // fixed header: generous spacing, name then code
+                        VerticalLayout {
+                            height: 98px;
+                            padding-left: 20px;
+                            padding-right: 16px;
+                            padding-top: 18px;
+                            padding-bottom: 16px;
+                            spacing: 10px;
+                            HorizontalLayout {
+                                height: 32px;
+                                spacing: 8px;
+                                Text {
+                                    text: root.detail-slug;
+                                    font-family: "Arial";
+                                    font-size: 24px;
+                                    font-weight: 700;
+                                    color: Theme.text;
+                                    horizontal-stretch: 1;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                }
+                                IconBtn {
+                                    size: 28px;
+                                    commands: "M 5 5 L 19 19 M 19 5 L 5 19";
+                                    clicked => { root.close-detail(); }
+                                }
+                            }
+                            HorizontalLayout {
+                                height: 22px;
+                                spacing: 8px;
+                                Plate { label: root.detail-code; height: 22px; }
+                                Rectangle { horizontal-stretch: 1; }
+                            }
+                        }
+
                         // body
                         body := Flickable {
                             vertical-stretch: 1;
@@ -1191,39 +1226,11 @@ export component AppWindow inherits Window {
                             content-height: max(body.height, root.spec.length * 22px + 720px);
                             VerticalLayout {
                                 width: body.width;
-                                padding-left: 16px;
+                                padding-left: 20px;
                                 padding-right: 16px;
-                                padding-top: 14px;
+                                padding-top: 6px;
                                 padding-bottom: 124px;
                                 spacing: 2px;
-
-                                HorizontalLayout {
-                                    height: 30px;
-                                    spacing: 8px;
-                                    Text {
-                                        text: root.detail-slug;
-                                        font-family: "Arial";
-                                        font-size: 22px;
-                                        font-weight: 700;
-                                        color: Theme.text;
-                                        horizontal-stretch: 1;
-                                        vertical-alignment: center;
-                                        overflow: elide;
-                                    }
-                                    IconBtn {
-                                        size: 28px;
-                                        commands: "M 5 5 L 19 19 M 19 5 L 5 19";
-                                        clicked => { root.close-detail(); }
-                                    }
-                                }
-                                HorizontalLayout {
-                                    height: 22px;
-                                    spacing: 8px;
-                                    Plate { label: root.detail-code; height: 22px; }
-                                    Rectangle { horizontal-stretch: 1; }
-                                }
-                                Rectangle { height: 4px; }
-                                HLine { }
 
                                 SectionHead {
                                     label: "SPECS";
