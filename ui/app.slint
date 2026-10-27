@@ -1184,53 +1184,46 @@ export component AppWindow inherits Window {
                         height: parent.height - 112px;
                         spacing: 0px;
 
-                        // head: name first, code under it; no category here
-                        VerticalLayout {
-                            padding-left: 16px;
-                            padding-right: 16px;
-                            padding-top: 14px;
-                            padding-bottom: 12px;
-                            spacing: 8px;
-                            HorizontalLayout {
-                                height: 30px;
-                                spacing: 8px;
-                                Text {
-                                    text: root.detail-slug;
-                                    font-family: "Arial";
-                                    font-size: 22px;
-                                    font-weight: 700;
-                                    color: Theme.text;
-                                    horizontal-stretch: 1;
-                                    vertical-alignment: center;
-                                    overflow: elide;
-                                }
-                                IconBtn {
-                                    size: 28px;
-                                    commands: "M 5 5 L 19 19 M 19 5 L 5 19";
-                                    clicked => { root.close-detail(); }
-                                }
-                            }
-                            HorizontalLayout {
-                                height: 22px;
-                                spacing: 8px;
-                                Plate { label: root.detail-code; height: 22px; }
-                                Rectangle { horizontal-stretch: 1; }
-                            }
-                        }
-                        HLine { }
-
                         // body
                         body := Flickable {
                             vertical-stretch: 1;
                             content-width: self.width;
-                            content-height: max(body.height, root.spec.length * 22px + 640px);
+                            content-height: max(body.height, root.spec.length * 22px + 720px);
                             VerticalLayout {
                                 width: body.width;
                                 padding-left: 16px;
                                 padding-right: 16px;
-                                padding-top: 10px;
+                                padding-top: 14px;
                                 padding-bottom: 12px;
                                 spacing: 2px;
+
+                                HorizontalLayout {
+                                    height: 30px;
+                                    spacing: 8px;
+                                    Text {
+                                        text: root.detail-slug;
+                                        font-family: "Arial";
+                                        font-size: 22px;
+                                        font-weight: 700;
+                                        color: Theme.text;
+                                        horizontal-stretch: 1;
+                                        vertical-alignment: center;
+                                        overflow: elide;
+                                    }
+                                    IconBtn {
+                                        size: 28px;
+                                        commands: "M 5 5 L 19 19 M 19 5 L 5 19";
+                                        clicked => { root.close-detail(); }
+                                    }
+                                }
+                                HorizontalLayout {
+                                    height: 22px;
+                                    spacing: 8px;
+                                    Plate { label: root.detail-code; height: 22px; }
+                                    Rectangle { horizontal-stretch: 1; }
+                                }
+                                Rectangle { height: 4px; }
+                                HLine { }
 
                                 SectionHead {
                                     label: "SPECS";
@@ -1310,7 +1303,6 @@ export component AppWindow inherits Window {
                                     }
                                     HorizontalLayout {
                                         height: 30px;
-                                        Rectangle { horizontal-stretch: 1; }
                                         Btn {
                                             label: root.edit-busy ? "Saving…" : "Save";
                                             width: 80px;
@@ -1319,6 +1311,7 @@ export component AppWindow inherits Window {
                                             enabled: root.edit-dirty && !root.edit-busy;
                                             clicked => { root.detail-save(); }
                                         }
+                                        Rectangle { horizontal-stretch: 1; }
                                     }
                                 }
 
@@ -1388,7 +1381,6 @@ export component AppWindow inherits Window {
                                     }
                                     HorizontalLayout {
                                         height: 30px;
-                                        Rectangle { horizontal-stretch: 1; }
                                         Btn {
                                             label: root.edit-busy ? "Saving…" : "Save";
                                             width: 80px;
@@ -1397,6 +1389,7 @@ export component AppWindow inherits Window {
                                             enabled: root.edit-dirty && !root.edit-busy;
                                             clicked => { root.detail-save(); }
                                         }
+                                        Rectangle { horizontal-stretch: 1; }
                                     }
                                 }
 
