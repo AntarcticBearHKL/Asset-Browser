@@ -582,16 +582,47 @@ export component Card inherits Rectangle {
             padding-top: 10px;
             padding-bottom: 8px;
             spacing: 8px;
-            Text {
-                text: root.slug;
-                font-family: "Cascadia Mono";
-                font-size: 14px;
-                font-weight: 600;
-                color: Theme.text;
-                height: 22px;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-                overflow: elide;
+            HorizontalLayout {
+                height: 26px;
+                spacing: 6px;
+                alignment: center;
+                Rectangle {
+                    width: 14px;
+                    height: 14px;
+                    background: transparent;
+
+                    // Soft halo + drop-shadow reads as a lit lamp.
+                    Rectangle {
+                        width: 14px;
+                        height: 14px;
+                        border-radius: 7px;
+                        background: (root.in-unity ? Theme.ok : Theme.text-dim).transparentize(0.80);
+                    }
+                    Rectangle {
+                        x: 3px;
+                        y: 3px;
+                        width: 8px;
+                        height: 8px;
+                        border-radius: 4px;
+                        background: root.in-unity ? Theme.ok : Theme.text-dim;
+                        drop-shadow-color: (root.in-unity ? Theme.ok : Theme.text-dim).transparentize(0.25);
+                        drop-shadow-blur: 10px;
+                        drop-shadow-offset-x: 0px;
+                        drop-shadow-offset-y: 0px;
+                    }
+                }
+                Text {
+                    text: root.slug;
+                    font-family: "Cascadia Mono";
+                    font-size: 14px;
+                    font-weight: 600;
+                    color: Theme.text;
+                    horizontal-stretch: 1;
+                    height: parent.height;
+                    horizontal-alignment: left;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
             }
             HorizontalLayout {
                 height: 28px;
@@ -610,10 +641,12 @@ export component Card inherits Rectangle {
                 }
                 Rectangle { horizontal-stretch: 1; }
                 if root.kind != 1 : Rectangle {
-                    width: 58px;
+                    width: 62px;
                     height: 24px;
                     border-radius: 5px;
-                    background: blender-ta.has-hover ? Theme.blender.darker(10%) : Theme.blender;
+                    border-width: 1px;
+                    border-color: Theme.blender;
+                    background: blender-ta.has-hover ? Theme.blender.transparentize(0.88) : transparent;
                     animate background { duration: 110ms; easing: ease-out; }
                     blender-ta := TouchArea {
                         mouse-cursor: pointer;
@@ -623,50 +656,11 @@ export component Card inherits Rectangle {
                         width: parent.width;
                         height: parent.height;
                         text: "Blender";
-                        color: #FFFFFF;
+                        color: Theme.blender;
                         font-family: "Arial";
                         font-size: 10.5px;
                         font-weight: 600;
                         horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
-                }
-                HorizontalLayout {
-                    height: 22px;
-                    spacing: 4px;
-                    alignment: center;
-                    Rectangle {
-                        width: 14px;
-                        height: 14px;
-                        background: transparent;
-
-                        // Soft halo + drop-shadow reads as a lit lamp rather
-                        // than a flat grey dot.
-                        Rectangle {
-                            width: 14px;
-                            height: 14px;
-                            border-radius: 7px;
-                            background: (root.in-unity ? Theme.ok : Theme.text-dim).transparentize(0.80);
-                        }
-                        Rectangle {
-                            x: 3px;
-                            y: 3px;
-                            width: 8px;
-                            height: 8px;
-                            border-radius: 4px;
-                            background: root.in-unity ? Theme.ok : Theme.text-dim;
-                            drop-shadow-color: (root.in-unity ? Theme.ok : Theme.text-dim).transparentize(0.25);
-                            drop-shadow-blur: 10px;
-                            drop-shadow-offset-x: 0px;
-                            drop-shadow-offset-y: 0px;
-                        }
-                    }
-                    if root.width >= 190px : Text {
-                        text: "UNITY";
-                        font-family: "Cascadia Mono";
-                        font-size: 9px;
-                        letter-spacing: 0.8px;
-                        color: root.in-unity ? Theme.ok : Theme.text-dim;
                         vertical-alignment: center;
                     }
                 }
