@@ -1186,10 +1186,10 @@ export component AppWindow inherits Window {
 
                         // fixed header: generous spacing, name then code
                         VerticalLayout {
-                            height: 98px;
+                            height: 104px;
                             padding-left: 20px;
                             padding-right: 16px;
-                            padding-top: 18px;
+                            padding-top: 24px;
                             padding-bottom: 16px;
                             spacing: 10px;
                             HorizontalLayout {
@@ -1407,15 +1407,19 @@ export component AppWindow inherits Window {
 
                     }
                         // foot
-                        VerticalLayout {
+                        Rectangle {
                             y: parent.height - 112px;
                             width: parent.width;
                             height: 112px;
-                            padding-left: 16px;
-                            padding-right: 16px;
-                            padding-top: 14px;
-                            padding-bottom: 14px;
-                            spacing: 8px;
+                            background: Theme.surface;
+                            VerticalLayout {
+                                width: parent.width;
+                                height: parent.height;
+                                padding-left: 16px;
+                                padding-right: 16px;
+                                padding-top: 14px;
+                                padding-bottom: 14px;
+                                spacing: 8px;
                             if root.detail-kind == "material" : Btn { label: "Send to Painter"; primary: true; height: 42px; font-size: 14px; clicked => { root.detail-painter(); } }
                             if root.detail-kind != "material" : Btn {
                                 label: root.stage-active() ? "Open in Blender" : "Open in Blender";
@@ -1429,6 +1433,7 @@ export component AppWindow inherits Window {
                                 spacing: 8px;
                                 Btn { label: "Refresh"; horizontal-stretch: 8; height: 34px; clicked => { root.detail-refresh(); } }
                                 Btn { label: root.delete-armed ? "Sure?" : "Delete"; danger: true; danger-fill: true; horizontal-stretch: 2; height: 34px; clicked => { root.detail-delete(); } }
+                                }
                             }
                         }
                 }
