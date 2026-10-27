@@ -160,7 +160,7 @@ def _alb_texture(spec_path, root, fallbacks):
     def _fallback(kind):
         for path in fallbacks:
             name = os.path.basename(path).lower()
-            if kind == 'base' and any(k in name for k in ('main', '_alb', 'albedo', 'diffuse', 'basecolor')):
+            if kind == 'base' and any(k in name for k in ('main', '_alb', 'albedo', 'diffuse', 'basecolor', '_bc', '_base')):
                 return path
             if kind == 'normal' and any(k in name for k in ('_nrm', 'normal', '_n.', 'nmap')):
                 return path
@@ -172,6 +172,13 @@ def _alb_texture(spec_path, root, fallbacks):
             path = _fallback(kind)
         if not path or not os.path.isfile(path):
             return None
+        name = os.path.basename(path).lower()
+        for node in mat.node_tree.nodes:
+            if node.type == 'TEX_IMAGE' and node.image is not None:
+                if os.path.basename(node.image.filepath).lower() == name:
+                    if kind == 'normal':
+                        node.image.colorspace_settings.name = 'Non-Color'
+                    return node
         node = mat.node_tree.nodes.new('ShaderNodeTexImage')
         node.image = bpy.data.images.load(path, check_existing=True)
         node.label = os.path.basename(path)
@@ -192,10 +199,10 @@ def _alb_texture(spec_path, root, fallbacks):
     def _wire(mat, entry):
         mat.use_nodes = True
         tree = mat.node_tree
-        # The FBX importer may already have created stale/duplicate texture
-        # nodes; replace them with the library sidecar's explicit slots.
+        # Drop only texture nodes with no image; valid nodes from the FBX stay
+        # as a fallback, so a sidecar without a slot never removes a texture.
         for node in list(tree.nodes):
-            if node.type in ('TEX_IMAGE', 'NORMAL_MAP'):
+            if node.type == 'TEX_IMAGE' and node.image is None:
                 tree.nodes.remove(node)
         bsdf = next((n for n in tree.nodes if n.type == 'BSDF_PRINCIPLED'), None)
         if bsdf is None:

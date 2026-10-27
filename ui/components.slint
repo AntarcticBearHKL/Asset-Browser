@@ -529,6 +529,7 @@ export component DialogField inherits VerticalLayout {
 // Asset card
 // ---------------------------------------------------------------------------
 export component Card inherits Rectangle {
+    cache-rendering-hint: true;
     in property <string> code: "";
     in property <string> slug: "";
     in property <image> thumb;
@@ -548,10 +549,8 @@ export component Card inherits Rectangle {
     border-width: 1px;
     border-color: (hover.has-hover || root.in-cart) ? Theme.border-strong : Theme.border;
     border-radius: 8px;
-    transform-scale-x: (hover.has-hover || root.in-cart) ? 1.012 : 1.0;
-    transform-scale-y: (hover.has-hover || root.in-cart) ? 1.012 : 1.0;
-    animate transform-scale-x { duration: 180ms; easing: ease-out; }
-    animate transform-scale-y { duration: 180ms; easing: ease-out; }
+    transform-scale-x: 1.0;
+    transform-scale-y: 1.0;
     animate border-color { duration: 150ms; easing: ease-out; }
     animate background { duration: 150ms; easing: ease-out; }
     clip: true;
