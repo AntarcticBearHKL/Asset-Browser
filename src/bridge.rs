@@ -242,21 +242,22 @@ def _alb_texture(spec_path, root, fallbacks):
                 if slot.material is not None:
                     used.add(slot.material)
 
-    applied = 0
+    wired = set()
     for entry in _spec.get('materials', []):
         mat = _material(entry.get('name'))
         if mat is not None:
             _wire(mat, entry)
-            applied += 1
-    if applied == 0:
-        fallback_entry = {'textures': {}}
-        base = _fallback('base')
-        normal = _fallback('normal')
-        if base:
-            fallback_entry['textures']['base_color'] = base
-        if normal:
-            fallback_entry['textures']['normal'] = normal
-        for mat in used:
+            wired.add(mat)
+    # Any material the sidecar did not name still gets the best texture match.
+    fallback_entry = {'textures': {}}
+    base = _fallback('base')
+    normal = _fallback('normal')
+    if base:
+        fallback_entry['textures']['base_color'] = base
+    if normal:
+        fallback_entry['textures']['normal'] = normal
+    for mat in used:
+        if mat not in wired:
             _wire(mat, fallback_entry)
 "#;
 
