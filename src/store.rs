@@ -19,6 +19,9 @@ fn transparency_light_default() -> f32 {
 fn blur_default() -> f32 {
     100.0
 }
+fn sections_open_default() -> bool {
+    true
+}
 
 /// Everything that survives a restart.
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -60,6 +63,13 @@ pub struct Store {
     pub deepseek_base: String,
     #[serde(default)]
     pub deepseek_auto_tag: bool,
+    /// Detail pane sections, shared by every asset and remembered across runs.
+    #[serde(default = "sections_open_default")]
+    pub specs_open: bool,
+    #[serde(default = "sections_open_default")]
+    pub category_open: bool,
+    #[serde(default = "sections_open_default")]
+    pub tags_open: bool,
 }
 
 fn deepseek_model_default() -> String {
@@ -88,6 +98,9 @@ impl Default for Store {
             deepseek_model: deepseek_model_default(),
             deepseek_base: deepseek_base_default(),
             deepseek_auto_tag: false,
+            specs_open: true,
+            category_open: true,
+            tags_open: true,
         }
     }
 }

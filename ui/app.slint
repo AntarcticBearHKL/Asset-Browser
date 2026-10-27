@@ -236,6 +236,7 @@ export component AppWindow inherits Window {
     callback detail-add-tag(string);
     callback detail-remove-tag(string);
     callback detail-ai-tag();
+    callback section-toggled(int, bool);
     callback detail-save();
     callback detail-select-slide(int);
     callback detail-delete();
@@ -1174,12 +1175,13 @@ export component AppWindow inherits Window {
                 // ---- spec pane (30%) ----
                 Rectangle {
                     horizontal-stretch: 3;
+                    vertical-stretch: 1;
                     max-width: parent.width * 0.3;
                     background: Theme.surface;
                     Rectangle { x: 0px; width: 1px; height: parent.height; background: Theme.divider; }
                     VerticalLayout {
                         width: parent.width;
-                        height: parent.height;
+                        height: parent.height - 112px;
                         spacing: 0px;
 
                         // head: name first, code under it; no category here
@@ -1233,7 +1235,10 @@ export component AppWindow inherits Window {
                                 SectionHead {
                                     label: "SPECS";
                                     open: root.specs-open;
-                                    toggled => { root.specs-open = !root.specs-open; }
+                                    toggled => {
+                                        root.specs-open = !root.specs-open;
+                                        root.section-toggled(0, root.specs-open);
+                                    }
                                 }
                                 if root.specs-open : VerticalLayout {
                                     padding-left: 10px;
@@ -1269,7 +1274,10 @@ export component AppWindow inherits Window {
                                 SectionHead {
                                     label: "CATEGORY";
                                     open: root.category-open;
-                                    toggled => { root.category-open = !root.category-open; }
+                                    toggled => {
+                                        root.category-open = !root.category-open;
+                                        root.section-toggled(1, root.category-open);
+                                    }
                                 }
                                 if root.category-open : VerticalLayout {
                                     padding-left: 10px;
@@ -1320,7 +1328,10 @@ export component AppWindow inherits Window {
                                 SectionHead {
                                     label: "TAGS";
                                     open: root.tags-open;
-                                    toggled => { root.tags-open = !root.tags-open; }
+                                    toggled => {
+                                        root.tags-open = !root.tags-open;
+                                        root.section-toggled(2, root.tags-open);
+                                    }
                                 }
                                 if root.tags-open : VerticalLayout {
                                     padding-left: 10px;
@@ -1394,8 +1405,12 @@ export component AppWindow inherits Window {
                         }
                         HLine { }
 
+                    }
                         // foot
                         VerticalLayout {
+                            y: parent.height - 112px;
+                            width: parent.width;
+                            height: 112px;
                             padding-left: 16px;
                             padding-right: 16px;
                             padding-top: 14px;
@@ -1416,7 +1431,6 @@ export component AppWindow inherits Window {
                                 Btn { label: root.delete-armed ? "Sure?" : "Delete"; danger: true; danger-fill: true; horizontal-stretch: 2; height: 34px; clicked => { root.detail-delete(); } }
                             }
                         }
-                    }
                 }
             }
             if root.pick-open == 4 || root.pick-open == 5 : Rectangle {

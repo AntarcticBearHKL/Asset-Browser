@@ -2498,6 +2498,9 @@ fn main() -> Result<(), slint::PlatformError> {
         ui.set_painter_base(a.store.painter_base.clone().into());
         ui.set_painter_bridge(a.store.painter_bridge.clone().into());
         ui.set_painter_root(a.store.painter_root.clone().into());
+        ui.set_specs_open(a.store.specs_open);
+        ui.set_category_open(a.store.category_open);
+        ui.set_tags_open(a.store.tags_open);
         ui.set_deepseek_key(a.store.deepseek_api_key.clone().into());
         ui.set_deepseek_model(a.store.deepseek_model.clone().into());
         ui.set_deepseek_state(
@@ -3474,6 +3477,20 @@ fn wire_callbacks(ui: &AppWindow, app_rc: &Rc<RefCell<App>>, drag: &Rc<WindowDra
                     }
                 });
             });
+        });
+    }
+    {
+        let app_rc = app_rc.clone();
+        ui.on_section_toggled(move |which, open| {
+            if let Ok(mut a) = app_rc.try_borrow_mut() {
+                match which {
+                    0 => a.store.specs_open = open,
+                    1 => a.store.category_open = open,
+                    2 => a.store.tags_open = open,
+                    _ => return,
+                }
+                store::save(&a.store);
+            }
         });
     }
     {

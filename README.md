@@ -116,8 +116,10 @@ themselves when `D:\3D Resource\_Catalog\manifest.json` is absent.
 - **Card actions** — add to cart, copy the asset JSON, and open models/rigs in Blender.
 - **Detail panel** — name first with the code beneath it; SPECS, CATEGORY and TAGS are
   prominent collapsible sections, and category and tags each have their own small save
-  button. The footer keeps Open in Blender plus a solid-red Delete at a
-  80/20 Refresh/Delete split; importing into Unity is left to the agent.
+  button. The footer is pinned to the bottom: Open in Blender, then a solid-red
+  Delete at an 80/20 Refresh/Delete split. Section open/closed states are shared
+  by every asset and remembered in `store.json` across launches. Importing into
+  Unity is left to the agent.
 - **Unity status** — the bridge health probe also asks Unity for its import ledger every
   15 s; matching cards turn the UNITY lamp green (grey when absent). **Sync Unity** in the toolbar (and in the
   Unity dialog) refreshes it immediately.
