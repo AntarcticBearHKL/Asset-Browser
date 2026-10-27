@@ -114,6 +114,8 @@ themselves when `D:\3D Resource\_Catalog\manifest.json` is absent.
   triangles ↑↓), tag filtering by clicking a card tag, and a second toolbar row
   with the active-filter chips, matching count and library total.
 - **Card actions** — add to cart, copy the asset JSON, and open models/rigs in Blender.
+  Blender imports also apply the sidecar's material slots (base colour and normal)
+  to the FBX materials, so the hand-off is not left untextured.
 - **Detail panel** — name first with the code beneath it; SPECS, CATEGORY and TAGS are
   prominent collapsible sections, and category and tags each have their own small save
   button. The footer is pinned to the bottom: Open in Blender, then a solid-red

@@ -2615,6 +2615,7 @@ fn wire_callbacks(ui: &AppWindow, app_rc: &Rc<RefCell<App>>, drag: &Rc<WindowDra
                 a.state.set_tab(Kind::from_num(tab));
                 if let Some(u) = weak.upgrade() {
                     sync_all(&u, &a);
+                    u.set_grid_scroll(0.0);
                 }
             }
         });
@@ -2629,6 +2630,7 @@ fn wire_callbacks(ui: &AppWindow, app_rc: &Rc<RefCell<App>>, drag: &Rc<WindowDra
                 a.state.clamp_page();
                 if let Some(u) = weak.upgrade() {
                     sync_view(&u, &a);
+                    u.set_grid_scroll(0.0);
                 }
             }
         });
@@ -2644,6 +2646,7 @@ fn wire_callbacks(ui: &AppWindow, app_rc: &Rc<RefCell<App>>, drag: &Rc<WindowDra
                 if let Some(u) = weak.upgrade() {
                     u.set_query("".into());
                     sync_view(&u, &a);
+                    u.set_grid_scroll(0.0);
                 }
             }
         });
@@ -2671,6 +2674,7 @@ fn wire_callbacks(ui: &AppWindow, app_rc: &Rc<RefCell<App>>, drag: &Rc<WindowDra
                 a.state.clamp_page();
                 if let Some(u) = weak.upgrade() {
                     sync_all(&u, &a);
+                    u.set_grid_scroll(0.0);
                 }
             }
         });
@@ -2695,6 +2699,7 @@ fn wire_callbacks(ui: &AppWindow, app_rc: &Rc<RefCell<App>>, drag: &Rc<WindowDra
                 a.state.clamp_page();
                 if let Some(u) = weak.upgrade() {
                     sync_all(&u, &a);
+                    u.set_grid_scroll(0.0);
                 }
             }
         });
@@ -2708,6 +2713,7 @@ fn wire_callbacks(ui: &AppWindow, app_rc: &Rc<RefCell<App>>, drag: &Rc<WindowDra
                 if let Some(u) = weak.upgrade() {
                     u.set_sort_index(a.state.sort.index());
                     sync_view(&u, &a);
+                    u.set_grid_scroll(0.0);
                 }
             }
         });
@@ -2721,6 +2727,7 @@ fn wire_callbacks(ui: &AppWindow, app_rc: &Rc<RefCell<App>>, drag: &Rc<WindowDra
                 if let Some(u) = weak.upgrade() {
                     u.set_query("".into());
                     sync_all(&u, &a);
+                    u.set_grid_scroll(0.0);
                 }
             }
         });
@@ -2892,6 +2899,7 @@ fn wire_callbacks(ui: &AppWindow, app_rc: &Rc<RefCell<App>>, drag: &Rc<WindowDra
                         persist(&a.store, &a.state.cart);
                         a.state.clamp_page();
                         sync_all(&u, a);
+                        u.set_grid_scroll(0.0);
                         show_toast(&u, a, &format!("Refreshed ({count} assets)"), "ok");
                     });
                     u.set_busy(false);
@@ -3027,6 +3035,7 @@ fn wire_callbacks(ui: &AppWindow, app_rc: &Rc<RefCell<App>>, drag: &Rc<WindowDra
                 a.state.clamp_page();
                 if let Some(u) = weak.upgrade() {
                     sync_view(&u, &a);
+                    u.set_grid_scroll(0.0);
                 }
             }
         });

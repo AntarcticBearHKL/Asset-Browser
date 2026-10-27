@@ -541,8 +541,8 @@ fn real_manifest_matches_ground_truth() {
         return;
     };
     let items = lib.load_manifest().expect("manifest loads");
-    assert_eq!(items.len(), 1976);
-    assert_eq!(items.iter().filter(|i| i.kind == "model").count(), 1913);
+    assert_eq!(items.len(), 1975);
+    assert_eq!(items.iter().filter(|i| i.kind == "model").count(), 1912);
     assert_eq!(items.iter().filter(|i| i.kind == "material").count(), 52);
     assert_eq!(items.iter().filter(|i| i.kind == "rig").count(), 11);
     assert!(items.iter().filter(|i| i.kind == "rig").all(|i| !i.slug.is_empty()));
@@ -1454,7 +1454,7 @@ fn real_library_filters_and_reads_files() {
     let tax = lib.taxonomy_json().expect("taxonomy.json readable");
     let taxonomy = build_taxonomy(&items, Some(&tax));
     let mut s = AppState::new(items, Vec::new(), taxonomy);
-    assert_eq!(s.kind_count(Kind::Model), 1913);
+    assert_eq!(s.kind_count(Kind::Model), 1912);
 
     s.l1 = "Architecture".into();
     s.l2 = "Beam".into();
@@ -1714,4 +1714,17 @@ fn cart_grid_chunks_five_previews_per_row() {
     assert_eq!((rows[0].a, rows[0].e, rows[0].n), (0, 4, 5));
     assert_eq!((rows[2].a, rows[2].b, rows[2].e, rows[2].n), (10, 11, -1, 2));
     assert!(crate::cart_grid_rows(0).is_empty());
+}
+
+
+
+#[test]
+fn blender_import_code_applies_sidecar_textures() {
+    let mut it = item("AR-0019", "model", "Architecture", "Building", "asianhouse_2", &[]);
+    it.path = "Models/Architecture/Building/asianhouse_2".into();
+    it.textures = vec!["_textures/Model/Other/Main.png".into()];
+    let code = crate::bridge::blender_import_code(&[it], r"D:\3D Resource");
+    assert!(code.contains("_alb_texture("));
+    assert!(code.contains("asianhouse_2.json"));
+    assert!(code.contains("Main.png"));
 }

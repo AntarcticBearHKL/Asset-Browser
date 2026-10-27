@@ -127,6 +127,139 @@ fn blender_execute(addr: &str, code: &str, timeout: Duration) -> Result<serde_js
     serde_json::from_slice(&out[..end]).map_err(|e| e.to_string())
 }
 
+
+/// Python helper injected before the per-asset import loop. It reads the
+/// library sidecar (`<slug>.json`) and wires its material texture slots into
+/// the FBX materials Blender created; the FBX itself often has stale texture
+/// paths, which is why importing it alone looked untextured.
+const BLENDER_TEXTURE_HELPER: &str = r#"
+def _alb_texture(spec_path, root, fallbacks):
+    import json as _json
+    if not os.path.isfile(spec_path):
+        return
+    try:
+        with open(spec_path, encoding='utf-8-sig') as _fh:
+            _spec = _json.load(_fh)
+    except Exception:
+        return
+
+    def _resolve(rel):
+        if not rel:
+            return None
+        path = rel
+        if not os.path.isabs(path):
+            path = os.path.join(root, rel.replace('/', os.sep))
+        if os.path.isfile(path):
+            return path
+        if '_opq' in path:
+            alt = path.replace('_opq', '')
+            if os.path.isfile(alt):
+                return alt
+        return None
+
+    def _fallback(kind):
+        for path in fallbacks:
+            name = os.path.basename(path).lower()
+            if kind == 'base' and any(k in name for k in ('main', '_alb', 'albedo', 'diffuse', 'basecolor')):
+                return path
+            if kind == 'normal' and any(k in name for k in ('_nrm', 'normal', '_n.', 'nmap')):
+                return path
+        return None
+
+    def _image_node(mat, rel, kind):
+        path = _resolve(rel)
+        if path is None:
+            path = _fallback(kind)
+        if not path or not os.path.isfile(path):
+            return None
+        node = mat.node_tree.nodes.new('ShaderNodeTexImage')
+        node.image = bpy.data.images.load(path, check_existing=True)
+        node.label = os.path.basename(path)
+        if kind == 'normal':
+            node.image.colorspace_settings.name = 'Non-Color'
+        return node
+
+    def _material(name):
+        low = (name or '').lower()
+        if not low:
+            return None
+        for mat in bpy.data.materials:
+            candidate = mat.name.lower()
+            if candidate == low or candidate.startswith(low + '.'):
+                return mat
+        return None
+
+    def _wire(mat, entry):
+        mat.use_nodes = True
+        tree = mat.node_tree
+        # The FBX importer may already have created stale/duplicate texture
+        # nodes; replace them with the library sidecar's explicit slots.
+        for node in list(tree.nodes):
+            if node.type in ('TEX_IMAGE', 'NORMAL_MAP'):
+                tree.nodes.remove(node)
+        bsdf = next((n for n in tree.nodes if n.type == 'BSDF_PRINCIPLED'), None)
+        if bsdf is None:
+            bsdf = tree.nodes.new('ShaderNodeBsdfPrincipled')
+            out = next((n for n in tree.nodes if n.type == 'OUTPUT_MATERIAL'), None)
+            if out is None:
+                out = tree.nodes.new('ShaderNodeOutputMaterial')
+            tree.links.new(bsdf.outputs['BSDF'], out.inputs['Surface'])
+
+        textures = entry.get('textures') or {}
+        params = entry.get('params') or {}
+        if textures.get('base_color'):
+            node = _image_node(mat, textures.get('base_color'), 'base')
+            if node is not None:
+                tree.links.new(node.outputs['Color'], bsdf.inputs['Base Color'])
+        if textures.get('normal'):
+            node = _image_node(mat, textures.get('normal'), 'normal')
+            if node is not None:
+                nmap = tree.nodes.new('ShaderNodeNormalMap')
+                strength = params.get('normal_strength', 1.0)
+                try:
+                    nmap.inputs['Strength'].default_value = float(strength)
+                except Exception:
+                    pass
+                tree.links.new(node.outputs['Color'], nmap.inputs['Color'])
+                tree.links.new(nmap.outputs['Normal'], bsdf.inputs['Normal'])
+        if 'metallic' in params:
+            try:
+                bsdf.inputs['Metallic'].default_value = float(params['metallic'])
+            except Exception:
+                pass
+        if 'smoothness' in params:
+            try:
+                bsdf.inputs['Roughness'].default_value = max(0.0, min(1.0, 1.0 - float(params['smoothness'])))
+            except Exception:
+                pass
+        if entry.get('double_sided') is not None:
+            mat.use_backface_culling = not bool(entry.get('double_sided'))
+
+    used = set()
+    for obj in bpy.context.selected_objects:
+        if obj.type == 'MESH':
+            for slot in obj.material_slots:
+                if slot.material is not None:
+                    used.add(slot.material)
+
+    applied = 0
+    for entry in _spec.get('materials', []):
+        mat = _material(entry.get('name'))
+        if mat is not None:
+            _wire(mat, entry)
+            applied += 1
+    if applied == 0:
+        fallback_entry = {'textures': {}}
+        base = _fallback('base')
+        normal = _fallback('normal')
+        if base:
+            fallback_entry['textures']['base_color'] = base
+        if normal:
+            fallback_entry['textures']['normal'] = normal
+        for mat in used:
+            _wire(mat, fallback_entry)
+"#;
+
 /// Python run inside Blender: clear the scene, then import each FBX and bind
 /// the asset into `scene.assetlib` so the Asset Library Bridge panel shows it.
 pub(crate) fn blender_import_code(items: &[Item], root: &str) -> String {
@@ -134,6 +267,7 @@ pub(crate) fn blender_import_code(items: &[Item], root: &str) -> String {
     let mut lines = vec![
         "import bpy".to_string(),
         "import os".to_string(),
+        BLENDER_TEXTURE_HELPER.to_string(),
         "imported = []".to_string(),
         "errors = []".to_string(),
         "bound = []".to_string(),
@@ -150,11 +284,18 @@ pub(crate) fn blender_import_code(items: &[Item], root: &str) -> String {
         // The bridge panel's rig tools key off `rig_slug`; models must clear it
         // so a rig bound earlier cannot leak into the next send.
         let rig_slug = if it.kind == "rig" { slug.as_str() } else { "" };
+        let spec = abs_win(root, &format!("{}/{}.json", it.path(), slug));
+        let fallbacks = it
+            .textures
+            .iter()
+            .map(|t| format!("r'{}'", abs_win(root, t)))
+            .collect::<Vec<_>>()
+            .join(", ");
 
         // Bind `scene.assetlib` only after the FBX importer succeeded: the
         // panel must not advertise a name for an asset that failed to import.
         lines.push(format!(
-            "try:\n    with open(r'{fbx}', 'rb') as _fh:\n        _head = _fh.read(18)\n    if not _head.startswith(b'Kaydara FBX Binary'):\n        raise RuntimeError('not a binary FBX (Blender does not support ASCII FBX)')\n    _scale = scene.unit_settings.scale_length\n    if not _scale or _scale <= 0:\n        _scale = 1.0\n    _ret = bpy.ops.import_scene.fbx(filepath=r'{fbx}', global_scale=_scale)\n    if 'FINISHED' not in _ret:\n        raise RuntimeError('FBX importer returned %r' % (_ret,))\n    imported.append(r'{fbx}')\n    try:\n        p = scene.assetlib\n        p.library_root = r'{root_w}'\n        p.asset_rel = r'{rel}'\n        p.slug = r'{slug}'\n        p.code = r'{code}'\n        p.rig_slug = r'{rig_slug}'\n        bound.append(r'{code}')\n    except Exception as e:\n        bind_errors.append([r'{code}', str(e)])\nexcept Exception as e:\n    errors.append([r'{code}', str(e)])"
+            "try:\n    with open(r'{fbx}', 'rb') as _fh:\n        _head = _fh.read(18)\n    if not _head.startswith(b'Kaydara FBX Binary'):\n        raise RuntimeError('not a binary FBX (Blender does not support ASCII FBX)')\n    _scale = scene.unit_settings.scale_length\n    if not _scale or _scale <= 0:\n        _scale = 1.0\n    _ret = bpy.ops.import_scene.fbx(filepath=r'{fbx}', global_scale=_scale)\n    if 'FINISHED' not in _ret:\n        raise RuntimeError('FBX importer returned %r' % (_ret,))\n    imported.append(r'{fbx}')\n    try:\n        _alb_texture(r'{spec}', r'{root_w}', [{fallbacks}])\n    except Exception as e:\n        bind_errors.append([r'{code}', 'textures: ' + str(e)])\n    try:\n        p = scene.assetlib\n        p.library_root = r'{root_w}'\n        p.asset_rel = r'{rel}'\n        p.slug = r'{slug}'\n        p.code = r'{code}'\n        p.rig_slug = r'{rig_slug}'\n        bound.append(r'{code}')\n    except Exception as e:\n        bind_errors.append([r'{code}', str(e)])\nexcept Exception as e:\n    errors.append([r'{code}', str(e)])"
         ));
     }
     lines.push(
