@@ -527,7 +527,20 @@ export component AppWindow inherits Window {
                         x: search.width - 32px;
                         y: 3px;
                         size: 28px;
-                        commands: "M 3 3 L 11 11 M 11 3 L 3 11";
+                        commands: "M 6 6 L 18 18 M 18 6 L 6 18";
+                        clicked => { root.clear-query(); }
+                    }
+                    if root.query != "" : TouchArea {
+                        x: search.width - 32px;
+                        y: 3px;
+                        width: 28px;
+                        height: 28px;
+                        pointer-event(event) => {
+                            if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
+                                root.clear-query();
+                            }
+                            return EventResult.accept;
+                        }
                         clicked => { root.clear-query(); }
                     }
                 }

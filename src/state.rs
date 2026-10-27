@@ -157,13 +157,26 @@ impl AppState {
     /// Indices into `self.items` that pass the current filters, sorted.
     pub fn filtered(&self) -> Vec<usize> {
         let q = self.q.trim().to_lowercase();
+        // Compact tokens so `smabc`, `abc` and `sm abc` all match `sm_abc`.
+        let tokens: Vec<String> = q
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|t| !t.is_empty())
+            .map(str::to_string)
+            .collect();
         let mut out: Vec<usize> = Vec::new();
         for (i, it) in self.items.iter().enumerate() {
             if it.kind() != self.tab {
                 continue;
             }
-            if !q.is_empty() && !it.hay().contains(&q) {
-                continue;
+            if !q.is_empty() {
+                let hay = it.hay();
+                if !hay.contains(&q) {
+                    let compact: String =
+                        hay.chars().filter(|c| c.is_alphanumeric()).collect();
+                    if tokens.is_empty() || !tokens.iter().all(|t| compact.contains(t)) {
+                        continue;
+                    }
+                }
             }
             if !self.l1.is_empty() && it.l1 != self.l1 {
                 continue;

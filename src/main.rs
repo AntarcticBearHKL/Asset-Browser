@@ -186,7 +186,18 @@ fn begin_right_click_dismiss() -> bool {
         return false;
     };
     if !any_panel_open(&ui) {
-        return false;
+        // No panel is up: a right-click clears the active search instead.
+        if ui.get_query().trim().is_empty() {
+            return false;
+        }
+        SWALLOW_RIGHT_UP.with(|cell| cell.set(true));
+        let weak = ui.as_weak();
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(ui) = weak.upgrade() {
+                ui.invoke_clear_query();
+            }
+        });
+        return true;
     }
     SWALLOW_RIGHT_UP.with(|cell| cell.set(true));
     let weak = ui.as_weak();

@@ -1728,3 +1728,18 @@ fn blender_import_code_applies_sidecar_textures() {
     assert!(code.contains("asianhouse_2.json"));
     assert!(code.contains("Main.png"));
 }
+
+#[test]
+fn search_ignores_separators_and_token_order() {
+    let items = vec![
+        item("PR-0001", "model", "Prop", "Part", "sm_abc", &[]),
+        item("PR-0002", "model", "Prop", "Part", "other", &[]),
+    ];
+    let mut s = AppState::new(items, Vec::new(), Taxonomy::default());
+    for query in ["sm_abc", "smabc", "abc", "sm abc", "SMABC"] {
+        s.q = query.into();
+        assert_eq!(s.filtered().len(), 1, "query {query}");
+    }
+    s.q = "zzz".into();
+    assert_eq!(s.filtered().len(), 0);
+}
