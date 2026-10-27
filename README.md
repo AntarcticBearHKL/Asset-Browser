@@ -107,16 +107,20 @@ themselves when `D:\3D Resource\_Catalog\manifest.json` is absent.
   to jump). Page size (`12 / 24 / 48 / 96`, default 48) lives in the toolbar and opens a
   popup menu. Changing page scrolls to the top; changing page size keeps the first visible
   item; changing tab/filters/sort clamps the page so it can never point past the last one.
-  Each card has a square thumbnail well, a code plate, path-drawn action icons, the slug and
-  a strip of uppercase mono tag chips.
+  Each card leads with the mesh name in a larger bold face, then the action row
+  (cart / copy / Blender) and its tag chips. Cards for assets already in Unity's
+  import ledger show a green **UNITY** dot.
 - **Filters** — L1 + L2 category dropdowns (`All …` per level), sort (code / slug /
   triangles ↑↓), tag filtering by clicking a card tag, and a second toolbar row
   with the active-filter chips, matching count and library total.
-- **Card actions** — add to cart, copy the asset JSON, and hand off per kind: models/rigs →
-  Blender + Unity, materials → Substance Painter + Unity.
-- **Detail panel** — large preview with a texture filmstrip (centred tiles), full spec rows,
-  editable category and tags with save, per-asset refresh (re-reads `<slug>.json`), delete
-  with click-again confirmation, and the bridge hand-off buttons.
+- **Card actions** — add to cart, copy the asset JSON, and open models/rigs in Blender.
+- **Detail panel** — name first with the code beneath it; SPECS, CATEGORY and TAGS are
+  prominent collapsible sections, and category and tags each have their own small save
+  button. The footer keeps Open in Blender plus Refresh / Delete (70/30 split); importing
+  into Unity is left to the agent.
+- **Unity status** — the bridge health probe also asks Unity for its import ledger every
+  15 s; matching cards get the green UNITY dot. **Sync Unity** in the toolbar (and in the
+  Unity dialog) refreshes it immediately.
 - **Rig 3D preview** — rigs play their `.glb` animation inside the detail panel. Rendering is
   CPU-only: linear-blend skinning (`src/rig/`) plus a threaded, 2x super-sampled software
   rasterizer (`src/raster.rs`) into a Slint image — no GPU dependency. The panel opens on

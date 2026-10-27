@@ -3,7 +3,7 @@ import { Theme, AssetItem, GridRow, CartRow, CartGridRow, SpecRow, SlideItem, Cl
 // `ui.global::<Theme>()`; an import alone does not put the global in Slint's
 // generated Rust API.
 export { Theme } from "theme.slint";
-import { Plate, HLine, Btn, Icon, IconBtn, Tab, StatusIconBtn, Pick, TagChip, DialogHead, BridgeStatus, DialogField, Card, CartTile, GlassSlider, ModalScrim, ModalSurface } from "components.slint";
+import { Plate, HLine, Btn, Icon, IconBtn, Tab, StatusIconBtn, Pick, TagChip, DialogHead, BridgeStatus, DialogField, Card, CartTile, GlassSlider, ModalScrim, ModalSurface, SectionHead } from "components.slint";
 import { ListView, Slider } from "std-widgets.slint";
 
 // ---------------------------------------------------------------------------
@@ -120,9 +120,15 @@ export component AppWindow inherits Window {
     in-out property <[string]>       edit-l2-options: [];
     in-out property <int>            edit-l1-index: -1;
     in-out property <int>            edit-l2-index: -1;
+    in-out property <length>         detail-pick-x: 0px;
+    in-out property <length>         detail-pick-y: 0px;
+    in-out property <length>         detail-pick-w: 0px;
     in-out property <[string]>       edit-tags: [];
     in-out property <bool>           edit-dirty: false;
     in-out property <bool>           edit-busy: false;
+    in-out property <bool>           specs-open: true;
+    in-out property <bool>           category-open: true;
+    in-out property <bool>           tags-open: true;
     in-out property <bool>           delete-armed: false;
     in-out property <string>         edit-tag-input: "";
 
@@ -153,6 +159,7 @@ export component AppWindow inherits Window {
     in-out property <bool>   unity-open: false;
     in-out property <string> unity-status: "";
     in-out property <string> unity-base: "";
+    in property <string>     unity-sync-state: "";
     in-out property <bool>   painter-open: false;
     in-out property <string> painter-status: "";
     in-out property <string> painter-base: "";
@@ -221,8 +228,6 @@ export component AppWindow inherits Window {
     callback card-cart(int);
     callback card-copy(int);
     callback card-blender(int);
-    callback card-unity(int);
-    callback card-painter(int);
     callback card-tag(string);
     callback open-detail(int);
     callback close-detail();
@@ -236,7 +241,6 @@ export component AppWindow inherits Window {
     callback detail-delete();
     callback detail-refresh();
     callback detail-blender();
-    callback detail-unity();
     callback detail-painter();
     callback check-bridge(string);
     callback deepseek-test();
@@ -247,8 +251,7 @@ export component AppWindow inherits Window {
     callback unity-open-dialog();
     callback unity-close();
     callback unity-config(string);
-    callback unity-place-cart();
-    callback unity-action(string);
+    callback unity-sync();
     callback painter-open-dialog();
     callback painter-close();
     callback painter-config(string, string, string);
@@ -584,6 +587,15 @@ export component AppWindow inherits Window {
 
                 Rectangle { horizontal-stretch: 1; }
 
+                Btn {
+                    label: "Sync Unity";
+                    width: 96px;
+                    height: 28px;
+                    font-size: 11px;
+                    mono: true;
+                    enabled: root.unity-state == "ok";
+                    clicked => { root.unity-sync(); }
+                }
                 Text {
                     text: root.matching-label;
                     font-family: "Cascadia Mono";
@@ -626,112 +638,97 @@ export component AppWindow inherits Window {
                         t2: root.items[row.a].tag2;
                         t3: root.items[row.a].tag3;
                         in-cart: root.items[row.a].in-cart;
+                        in-unity: root.items[row.a].in-unity;
                         kind: root.items[row.a].kind;
                         init => { root.ensure-image(row.a); }
                         open => { root.open-detail(row.a); }
                         cart => { root.card-cart(row.a); }
                         copy => { root.card-copy(row.a); }
                         blender => { root.card-blender(row.a); }
-                        unity => { root.card-unity(row.a); }
-                        painter => { root.card-painter(row.a); }
                         tag(text) => { root.card-tag(text); }
                     }
                     if row.n >= 2 : Card {
                         width: root.card-w;
                         code: root.items[row.b].code; slug: root.items[row.b].slug; thumb: root.items[row.b].thumb;
                         t1: root.items[row.b].tag1; t2: root.items[row.b].tag2; t3: root.items[row.b].tag3;
-                        in-cart: root.items[row.b].in-cart; kind: root.items[row.b].kind;
+                        in-cart: root.items[row.b].in-cart; in-unity: root.items[row.b].in-unity; kind: root.items[row.b].kind;
                         init => { root.ensure-image(row.b); }
                         open => { root.open-detail(row.b); }
                         cart => { root.card-cart(row.b); }
                         copy => { root.card-copy(row.b); }
                         blender => { root.card-blender(row.b); }
-                        unity => { root.card-unity(row.b); }
-                        painter => { root.card-painter(row.b); }
                         tag(text) => { root.card-tag(text); }
                     }
                     if row.n >= 3 : Card {
                         width: root.card-w;
                         code: root.items[row.c].code; slug: root.items[row.c].slug; thumb: root.items[row.c].thumb;
                         t1: root.items[row.c].tag1; t2: root.items[row.c].tag2; t3: root.items[row.c].tag3;
-                        in-cart: root.items[row.c].in-cart; kind: root.items[row.c].kind;
+                        in-cart: root.items[row.c].in-cart; in-unity: root.items[row.c].in-unity; kind: root.items[row.c].kind;
                         init => { root.ensure-image(row.c); }
                         open => { root.open-detail(row.c); }
                         cart => { root.card-cart(row.c); }
                         copy => { root.card-copy(row.c); }
                         blender => { root.card-blender(row.c); }
-                        unity => { root.card-unity(row.c); }
-                        painter => { root.card-painter(row.c); }
                         tag(text) => { root.card-tag(text); }
                     }
                     if row.n >= 4 : Card {
                         width: root.card-w;
                         code: root.items[row.d].code; slug: root.items[row.d].slug; thumb: root.items[row.d].thumb;
                         t1: root.items[row.d].tag1; t2: root.items[row.d].tag2; t3: root.items[row.d].tag3;
-                        in-cart: root.items[row.d].in-cart; kind: root.items[row.d].kind;
+                        in-cart: root.items[row.d].in-cart; in-unity: root.items[row.d].in-unity; kind: root.items[row.d].kind;
                         init => { root.ensure-image(row.d); }
                         open => { root.open-detail(row.d); }
                         cart => { root.card-cart(row.d); }
                         copy => { root.card-copy(row.d); }
                         blender => { root.card-blender(row.d); }
-                        unity => { root.card-unity(row.d); }
-                        painter => { root.card-painter(row.d); }
                         tag(text) => { root.card-tag(text); }
                     }
                     if row.n >= 5 : Card {
                         width: root.card-w;
                         code: root.items[row.e].code; slug: root.items[row.e].slug; thumb: root.items[row.e].thumb;
                         t1: root.items[row.e].tag1; t2: root.items[row.e].tag2; t3: root.items[row.e].tag3;
-                        in-cart: root.items[row.e].in-cart; kind: root.items[row.e].kind;
+                        in-cart: root.items[row.e].in-cart; in-unity: root.items[row.e].in-unity; kind: root.items[row.e].kind;
                         init => { root.ensure-image(row.e); }
                         open => { root.open-detail(row.e); }
                         cart => { root.card-cart(row.e); }
                         copy => { root.card-copy(row.e); }
                         blender => { root.card-blender(row.e); }
-                        unity => { root.card-unity(row.e); }
-                        painter => { root.card-painter(row.e); }
                         tag(text) => { root.card-tag(text); }
                     }
                     if row.n >= 6 : Card {
                         width: root.card-w;
                         code: root.items[row.f].code; slug: root.items[row.f].slug; thumb: root.items[row.f].thumb;
                         t1: root.items[row.f].tag1; t2: root.items[row.f].tag2; t3: root.items[row.f].tag3;
-                        in-cart: root.items[row.f].in-cart; kind: root.items[row.f].kind;
+                        in-cart: root.items[row.f].in-cart; in-unity: root.items[row.f].in-unity; kind: root.items[row.f].kind;
                         init => { root.ensure-image(row.f); }
                         open => { root.open-detail(row.f); }
                         cart => { root.card-cart(row.f); }
                         copy => { root.card-copy(row.f); }
                         blender => { root.card-blender(row.f); }
-                        unity => { root.card-unity(row.f); }
-                        painter => { root.card-painter(row.f); }
                         tag(text) => { root.card-tag(text); }
                     }
                     if row.n >= 7 : Card {
                         width: root.card-w;
                         code: root.items[row.g].code; slug: root.items[row.g].slug; thumb: root.items[row.g].thumb;
                         t1: root.items[row.g].tag1; t2: root.items[row.g].tag2; t3: root.items[row.g].tag3;
-                        in-cart: root.items[row.g].in-cart; kind: root.items[row.g].kind;
+                        in-cart: root.items[row.g].in-cart; in-unity: root.items[row.g].in-unity; kind: root.items[row.g].kind;
                         init => { root.ensure-image(row.g); }
                         open => { root.open-detail(row.g); }
                         cart => { root.card-cart(row.g); }
                         copy => { root.card-copy(row.g); }
                         blender => { root.card-blender(row.g); }
-                        unity => { root.card-unity(row.g); }
-                        painter => { root.card-painter(row.g); }
                         tag(text) => { root.card-tag(text); }
                     }
                     if row.n >= 8 : Card {
                         width: root.card-w;
                         code: root.items[row.h].code; slug: root.items[row.h].slug; thumb: root.items[row.h].thumb;
                         t1: root.items[row.h].tag1; t2: root.items[row.h].tag2; t3: root.items[row.h].tag3;
-                        in-cart: root.items[row.h].in-cart; kind: root.items[row.h].kind;
+                        in-cart: root.items[row.h].in-cart; in-unity: root.items[row.h].in-unity; kind: root.items[row.h].kind;
                         init => { root.ensure-image(row.h); }
                         open => { root.open-detail(row.h); }
                         cart => { root.card-cart(row.h); }
                         copy => { root.card-copy(row.h); }
                         blender => { root.card-blender(row.h); }
-                        unity => { root.card-unity(row.h); }
-                        painter => { root.card-painter(row.h); }
                         tag(text) => { root.card-tag(text); }
                     }
                 }
@@ -1185,24 +1182,25 @@ export component AppWindow inherits Window {
                         height: parent.height;
                         spacing: 0px;
 
-                        // head
+                        // head: name first, code under it; no category here
                         VerticalLayout {
                             padding-left: 16px;
                             padding-right: 16px;
                             padding-top: 14px;
-                            padding-bottom: 14px;
+                            padding-bottom: 12px;
                             spacing: 8px;
                             HorizontalLayout {
-                                height: 28px;
+                                height: 30px;
                                 spacing: 8px;
                                 Text {
-                                    text: "ASSET DETAILS";
-                                    font-family: "Cascadia Mono";
-                                    font-size: 10px;
-                                    letter-spacing: 1.2px;
-                                    color: Theme.text-faint;
+                                    text: root.detail-slug;
+                                    font-family: "Arial";
+                                    font-size: 22px;
+                                    font-weight: 700;
+                                    color: Theme.text;
                                     horizontal-stretch: 1;
                                     vertical-alignment: center;
+                                    overflow: elide;
                                 }
                                 IconBtn {
                                     size: 28px;
@@ -1212,27 +1210,9 @@ export component AppWindow inherits Window {
                             }
                             HorizontalLayout {
                                 height: 22px;
+                                spacing: 8px;
                                 Plate { label: root.detail-code; height: 22px; }
                                 Rectangle { horizontal-stretch: 1; }
-                            }
-                            Text {
-                                text: root.detail-slug;
-                                font-family: "Arial";
-                                font-size: 16px;
-                                font-weight: 600;
-                                color: Theme.text;
-                                height: 22px;
-                                vertical-alignment: center;
-                                overflow: elide;
-                            }
-                            Text {
-                                text: root.detail-category;
-                                font-family: "Arial";
-                                font-size: 12px;
-                                color: Theme.text-faint;
-                                height: 15px;
-                                vertical-alignment: center;
-                                overflow: elide;
                             }
                         }
                         HLine { }
@@ -1241,148 +1221,172 @@ export component AppWindow inherits Window {
                         body := Flickable {
                             vertical-stretch: 1;
                             content-width: self.width;
-                            content-height: max(body.height, root.spec.length * 22px + 340px);
+                            content-height: max(body.height, root.spec.length * 22px + 640px);
                             VerticalLayout {
                                 width: body.width;
                                 padding-left: 16px;
                                 padding-right: 16px;
-                                padding-top: 14px;
+                                padding-top: 10px;
                                 padding-bottom: 12px;
-                                spacing: 4px;
+                                spacing: 2px;
 
-                                Text {
-                                    text: "SPECS";
-                                    font-family: "Cascadia Mono";
-                                    font-size: 10px;
-                                    letter-spacing: 1.2px;
-                                    color: Theme.text-faint;
-                                    height: 16px;
-                                    vertical-alignment: center;
+                                SectionHead {
+                                    label: "SPECS";
+                                    open: root.specs-open;
+                                    toggled => { root.specs-open = !root.specs-open; }
                                 }
-                                for s in root.spec : HorizontalLayout {
-                                    height: 22px;
-                                    spacing: 12px;
-                                    Text {
-                                        text: s.k;
-                                        font-family: "Cascadia Mono";
-                                        font-size: 10px;
-                                        letter-spacing: 0.6px;
-                                        color: Theme.text-faint;
-                                        width: 96px;
-                                        vertical-alignment: center;
-                                        overflow: elide;
-                                    }
-                                    Text {
-                                        text: s.v;
-                                        font-family: "Cascadia Mono";
-                                        font-size: 12px;
-                                        color: Theme.text;
-                                        horizontal-stretch: 1;
-                                        vertical-alignment: center;
-                                        overflow: elide;
-                                    }
-                                }
-
-                                Rectangle { height: 12px; }
-                                HLine { }
-
-                                Text {
-                                    text: "CATEGORY";
-                                    font-family: "Cascadia Mono";
-                                    font-size: 10px;
-                                    letter-spacing: 1.2px;
-                                    color: Theme.text-faint;
-                                    height: 24px;
-                                    vertical-alignment: center;
-                                }
-                                HorizontalLayout {
-                                    height: 34px;
-                                    spacing: 8px;
-                                    l1-edit := Pick {
-                                        horizontal-stretch: 1;
-                                        value: root.edit-l1-options.length > 0 && root.edit-l1-index >= 0 && root.edit-l1-index < root.edit-l1-options.length ? root.edit-l1-options[root.edit-l1-index] : "";
-                                        open: root.pick-open == 4;
-                                        clicked => { root.pick-open = root.pick-open == 4 ? -1 : 4; }
-                                    }
-                                    l2-edit := Pick {
-                                        horizontal-stretch: 1;
-                                        value: root.edit-l2-options.length > 0 && root.edit-l2-index >= 0 && root.edit-l2-index < root.edit-l2-options.length ? root.edit-l2-options[root.edit-l2-index] : "";
-                                        open: root.pick-open == 5;
-                                        clicked => { root.pick-open = root.pick-open == 5 ? -1 : 5; }
+                                if root.specs-open : VerticalLayout {
+                                    spacing: 2px;
+                                    for s in root.spec : HorizontalLayout {
+                                        height: 22px;
+                                        spacing: 12px;
+                                        Text {
+                                            text: s.k;
+                                            font-family: "Cascadia Mono";
+                                            font-size: 10px;
+                                            letter-spacing: 0.6px;
+                                            color: Theme.text-faint;
+                                            width: 96px;
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                        }
+                                        Text {
+                                            text: s.v;
+                                            font-family: "Cascadia Mono";
+                                            font-size: 12px;
+                                            color: Theme.text;
+                                            horizontal-stretch: 1;
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                        }
                                     }
                                 }
 
                                 Rectangle { height: 10px; }
                                 HLine { }
 
-                                Text {
-                                    text: "TAGS";
-                                    font-family: "Cascadia Mono";
-                                    font-size: 10px;
-                                    letter-spacing: 1.2px;
-                                    color: Theme.text-faint;
-                                    height: 24px;
-                                    vertical-alignment: center;
+                                SectionHead {
+                                    label: "CATEGORY";
+                                    open: root.category-open;
+                                    toggled => { root.category-open = !root.category-open; }
                                 }
-                                tag-strip := Flickable {
-                                    height: 30px;
-                                    content-width: max(tag-strip.width, root.edit-tags.length * 100px + 8px);
-                                    content-height: tag-strip.height;
-                                    HorizontalLayout {
-                                        width: max(tag-strip.width, root.edit-tags.length * 100px + 8px);
-                                        spacing: 6px;
-                                        alignment: start;
-                                        for t in root.edit-tags : TagChip {
-                                            label: t;
-                                            removable: true;
-                                            height: 24px;
-                                            removed => { root.detail-remove-tag(t); }
-                                        }
-                                    }
-                                }
-                                HorizontalLayout {
-                                    height: 34px;
+                                if root.category-open : VerticalLayout {
                                     spacing: 8px;
-                                    Rectangle {
-                                        horizontal-stretch: 1;
-                                        height: parent.height;
-                                        background: Theme.surface-2;
-                                        border-width: 1px;
-                                        border-color: Theme.border;
-                                        border-radius: 6px;
-                                        TextInput {
-                                            x: 10px; y: 0px;
-                                            width: parent.width - 20px;
-                                            height: parent.height;
-                                            text <=> root.edit-tag-input;
-                                            color: Theme.text;
-                                            font-family: "Arial";
-                                            font-size: 12px;
-                                            single-line: true;
-                                            vertical-alignment: center;
-                                            edited => { }
-                                            accepted => { root.detail-add-tag(root.edit-tag-input); }
+                                    HorizontalLayout {
+                                        height: 34px;
+                                        spacing: 8px;
+                                        l1-edit := Pick {
+                                            horizontal-stretch: 1;
+                                            value: root.edit-l1-options.length > 0 && root.edit-l1-index >= 0 && root.edit-l1-index < root.edit-l1-options.length ? root.edit-l1-options[root.edit-l1-index] : "";
+                                            open: root.pick-open == 4;
+                                            clicked => {
+                                                root.detail-pick-x = self.absolute-position.x;
+                                                root.detail-pick-y = self.absolute-position.y;
+                                                root.detail-pick-w = self.width;
+                                                root.pick-open = root.pick-open == 4 ? -1 : 4;
+                                            }
+                                        }
+                                        l2-edit := Pick {
+                                            horizontal-stretch: 1;
+                                            value: root.edit-l2-options.length > 0 && root.edit-l2-index >= 0 && root.edit-l2-index < root.edit-l2-options.length ? root.edit-l2-options[root.edit-l2-index] : "";
+                                            open: root.pick-open == 5;
+                                            clicked => {
+                                                root.detail-pick-x = self.absolute-position.x;
+                                                root.detail-pick-y = self.absolute-position.y;
+                                                root.detail-pick-w = self.width;
+                                                root.pick-open = root.pick-open == 5 ? -1 : 5;
+                                            }
                                         }
                                     }
-                                    Btn { label: "Add"; width: 54px; height: 34px; font-size: 12px; clicked => { root.detail-add-tag(root.edit-tag-input); } }
-                                    Btn {
-                                        label: "AI";
-                                        width: 46px;
+                                    HorizontalLayout {
+                                        height: 30px;
+                                        Rectangle { horizontal-stretch: 1; }
+                                        Btn {
+                                            label: root.edit-busy ? "Saving…" : "Save category";
+                                            width: 132px;
+                                            height: 30px;
+                                            font-size: 11px;
+                                            enabled: root.edit-dirty && !root.edit-busy;
+                                            clicked => { root.detail-save(); }
+                                        }
+                                    }
+                                }
+
+                                Rectangle { height: 10px; }
+                                HLine { }
+
+                                SectionHead {
+                                    label: "TAGS";
+                                    open: root.tags-open;
+                                    toggled => { root.tags-open = !root.tags-open; }
+                                }
+                                if root.tags-open : VerticalLayout {
+                                    spacing: 8px;
+                                    tag-strip := Flickable {
+                                        height: 30px;
+                                        content-width: max(tag-strip.width, root.edit-tags.length * 100px + 8px);
+                                        content-height: tag-strip.height;
+                                        HorizontalLayout {
+                                            width: max(tag-strip.width, root.edit-tags.length * 100px + 8px);
+                                            spacing: 6px;
+                                            alignment: start;
+                                            for t in root.edit-tags : TagChip {
+                                                label: t;
+                                                removable: true;
+                                                height: 24px;
+                                                removed => { root.detail-remove-tag(t); }
+                                            }
+                                        }
+                                    }
+                                    HorizontalLayout {
                                         height: 34px;
-                                        font-size: 12px;
-                                        enabled: !root.ai-busy;
-                                        clicked => { root.detail-ai-tag(); }
+                                        spacing: 8px;
+                                        Rectangle {
+                                            horizontal-stretch: 1;
+                                            height: parent.height;
+                                            background: Theme.surface-2;
+                                            border-width: 1px;
+                                            border-color: Theme.border;
+                                            border-radius: 6px;
+                                            TextInput {
+                                                x: 10px; y: 0px;
+                                                width: parent.width - 20px;
+                                                height: parent.height;
+                                                text <=> root.edit-tag-input;
+                                                color: Theme.text;
+                                                font-family: "Arial";
+                                                font-size: 12px;
+                                                single-line: true;
+                                                vertical-alignment: center;
+                                                edited => { }
+                                                accepted => { root.detail-add-tag(root.edit-tag-input); }
+                                            }
+                                        }
+                                        Btn { label: "Add"; width: 54px; height: 34px; font-size: 12px; clicked => { root.detail-add-tag(root.edit-tag-input); } }
+                                        Btn {
+                                            label: "AI";
+                                            width: 46px;
+                                            height: 34px;
+                                            font-size: 12px;
+                                            enabled: !root.ai-busy;
+                                            clicked => { root.detail-ai-tag(); }
+                                        }
+                                    }
+                                    HorizontalLayout {
+                                        height: 30px;
+                                        Rectangle { horizontal-stretch: 1; }
+                                        Btn {
+                                            label: root.edit-busy ? "Saving…" : "Save tags";
+                                            width: 132px;
+                                            height: 30px;
+                                            font-size: 11px;
+                                            enabled: root.edit-dirty && !root.edit-busy;
+                                            clicked => { root.detail-save(); }
+                                        }
                                     }
                                 }
 
                                 Rectangle { height: 12px; }
-                                Btn {
-                                    label: root.edit-busy ? "Saving..." : "Save";
-                                    primary: true;
-                                    height: 34px;
-                                    enabled: root.edit-dirty && !root.edit-busy;
-                                    clicked => { root.detail-save(); }
-                                }
                             }
                         }
                         HLine { }
@@ -1402,12 +1406,11 @@ export component AppWindow inherits Window {
                                 font-size: 14px;
                                 clicked => { root.detail-blender(); }
                             }
-                            Btn { label: "Place in Unity"; height: 34px; clicked => { root.detail-unity(); } }
                             HorizontalLayout {
                                 height: 34px;
                                 spacing: 8px;
-                                Btn { label: "Refresh"; horizontal-stretch: 1; height: 34px; clicked => { root.detail-refresh(); } }
-                                Btn { label: root.delete-armed ? "Click again" : "Delete asset"; danger: true; horizontal-stretch: 1; height: 34px; clicked => { root.detail-delete(); } }
+                                Btn { label: "Refresh"; horizontal-stretch: 7; height: 34px; clicked => { root.detail-refresh(); } }
+                                Btn { label: root.delete-armed ? "Sure?" : "Delete"; danger: true; horizontal-stretch: 3; height: 34px; clicked => { root.detail-delete(); } }
                             }
                         }
                     }
@@ -1419,9 +1422,9 @@ export component AppWindow inherits Window {
                 background: transparent;
                 ModalScrim { dismissed => { root.close-panel(); } }
                 Rectangle {
-                    x: (root.pick-open == 4 ? l1-edit.absolute-position.x : l2-edit.absolute-position.x) - sheet.absolute-position.x;
-                    y: (root.pick-open == 4 ? l1-edit.absolute-position.y : l2-edit.absolute-position.y) - sheet.absolute-position.y + 38px;
-                    width: root.pick-open == 4 ? l1-edit.width : l2-edit.width;
+                    x: root.detail-pick-x - sheet.absolute-position.x;
+                    y: root.detail-pick-y - sheet.absolute-position.y + 38px;
+                    width: root.detail-pick-w;
                     height: ((root.pick-open == 4 ? root.edit-l1-options.length : root.edit-l2-options.length) * 32px) + 8px;
                     background: Theme.surface;
                     border-width: 1px;
@@ -1724,7 +1727,7 @@ export component AppWindow inherits Window {
                 width: parent.width;
                 height: parent.height;
                 spacing: 0px;
-                DialogHead { eyebrow: "UNITY"; title: "Place in Unity"; closed => { root.unity-close(); } }
+                DialogHead { eyebrow: "UNITY"; title: "Unity bridge"; closed => { root.unity-close(); } }
                 HLine { }
                 VerticalLayout {
                     vertical-stretch: 1;
@@ -1736,7 +1739,7 @@ export component AppWindow inherits Window {
                     BridgeStatus { state: root.unity-state; text: root.unity-status; recheck => { root.check-bridge("unity"); } }
                     DialogField { caption: "MCP ENDPOINT"; value <=> root.unity-base; edited(t) => { root.unity-config(root.unity-base); } }
                     Text {
-                        text: "Unity must be running with the MCP bridge enabled. Place puts the cart into the open scene; Sync re-reads the manifest; Export writes the scene back.";
+                        text: "Unity must be running with the MCP bridge enabled. Sync imported re-reads the Unity ledger; cards for assets already in the project get a green UNITY dot. Importing is handled by the agent.";
                         color: Theme.text-faint;
                         font-family: "Arial";
                         font-size: 12px;
@@ -1753,9 +1756,19 @@ export component AppWindow inherits Window {
                     padding-bottom: 18px;
                     spacing: 10px;
                     alignment: end;
-                    Btn { label: "Sync"; height: 38px; clicked => { root.unity-action("sync"); } }
-                    Btn { label: "Export"; height: 38px; clicked => { root.unity-action("export"); } }
-                    Btn { label: "Place cart"; primary: true; height: 38px; font-size: 13px; clicked => { root.unity-place-cart(); } }
+                    HorizontalLayout {
+                        height: 38px;
+                        spacing: 8px;
+                        Text {
+                            text: root.unity-sync-state;
+                            font-family: "Cascadia Mono";
+                            font-size: 11px;
+                            color: Theme.text-dim;
+                            horizontal-stretch: 1;
+                            vertical-alignment: center;
+                        }
+                        Btn { label: "Sync imported"; height: 38px; enabled: root.unity-state == "ok"; clicked => { root.unity-sync(); } }
+                    }
                 }
             }
         }

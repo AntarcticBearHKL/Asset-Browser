@@ -22,7 +22,7 @@ pub const BLENDER_ADDON: &str = "127.0.0.1:9876";
 /// Blender executable for the "open in a new window" action.
 const BLENDER_EXE: &str = r"D:\SteamLibrary\steamapps\common\Blender\blender.exe";
 /// Unity MCP config file (host + bearer token).
-const UNITY_CONFIG: &str = r"D:\Unity Projects\INE_PROJ1\UserSettings\AI-Game-Developer-Config.json";
+const UNITY_CONFIG: &str = r"C:\Users\antar\Documents\Unity Projects\INE_PROJ1\UserSettings\AI-Game-Developer-Config.json";
 
 /// Bridge status for a header dot / dialog line.
 #[derive(Clone, Default)]
@@ -267,21 +267,14 @@ fn unity_config(base: &str) -> (String, String) {
     (host, token)
 }
 
-fn csharp_literal(s: &str) -> String {
-    format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
-}
-
-/// POST a C# expression to the Unity MCP script-execute endpoint.
-fn unity_call(base: &str, call_expr: &str) -> Result<String, String> {
+/// Run a C# snippet in the Unity editor and return its textual result. Snippet
+/// mode is used instead of a generated class: the class form needs the editor
+/// assembly references and can hang on this project.
+fn unity_eval(base: &str, code: &str) -> Result<String, String> {
     let (host, token) = unity_config(base);
-    let code = format!(
-        "public class AssetLibBridgeCall {{ public static string Run() {{ return {call_expr}; }} }}"
-    );
     let body = json!({
         "csharpCode": code,
-        "className": "AssetLibBridgeCall",
-        "methodName": "Run",
-        "isMethodBody": false,
+        "isMethodBody": true,
     });
     let url = format!("{host}/api/tools/script-execute");
     let (status, text) = http_post(&url, &body, Some(&token), SEND_TIMEOUT)
@@ -291,57 +284,46 @@ fn unity_call(base: &str, call_expr: &str) -> Result<String, String> {
     }
     let v: serde_json::Value =
         serde_json::from_str(&text).map_err(|_| format!("Unity returned non-JSON: {text}"))?;
-    let call_status = v.get("status").and_then(|s| s.as_str());
-    if matches!(call_status, None | Some("success") | Some("ok")) {
-        Ok(v.get("result").map(|r| r.to_string()).unwrap_or_default())
-    } else {
-        Err(v
-            .get("result")
-            .and_then(|r| r.as_str())
+    if v.get("status").and_then(|s| s.as_str()) != Some("success") {
+        return Err(v
+            .get("message")
+            .or_else(|| v.get("error"))
+            .and_then(|m| m.as_str())
             .unwrap_or("Unity call failed")
-            .to_string())
+            .to_string());
     }
+    let raw = v
+        .get("content")
+        .and_then(|c| c.as_array())
+        .and_then(|a| a.first())
+        .and_then(|c| c.get("text"))
+        .and_then(|t| t.as_str())
+        .unwrap_or("");
+    let raw = raw.strip_prefix("System.String: ").unwrap_or(raw).trim();
+    let unquoted = serde_json::from_str::<String>(raw).unwrap_or_else(|_| raw.to_string());
+    Ok(unquoted)
 }
 
 pub fn unity_health(base: &str) -> Dot {
     let (host, _) = unity_config(base);
     match http_get(&format!("{host}/api/tools"), HEALTH_TIMEOUT) {
-        Ok((200, _)) => dot("ok", "Unity connected — ready to place"),
+        Ok((200, _)) => dot("ok", "Unity connected — imported list ready"),
         Ok((code, _)) => dot("warn", &format!("Unity MCP answered HTTP {code}")),
         Err(_) => dot("down", "Unity is not running (MCP not listening)"),
     }
 }
 
-/// A whole set into the open Unity scene in one request: Unity stages/imports the batch as a
-/// single transaction, then lays the set out in the scene. `request_id` makes a retry idempotent.
-pub fn unity_place_items(base: &str, slugs: &[String], request_id: &str) -> Result<String, String> {
-    let slugs: Vec<&str> = slugs.iter().map(|s| s.as_str()).filter(|s| !s.is_empty()).collect();
-    if slugs.is_empty() {
-        return Err("Nothing to place".to_string());
-    }
-    let csv = slugs.join(",");
-    let call = if request_id.is_empty() {
-        format!(
-            "HKLGame.AssetLib.AssetLibraryBridge.PlaceMany({})",
-            csharp_literal(&csv)
-        )
-    } else {
-        format!(
-            "HKLGame.AssetLib.AssetLibraryBridge.PlaceMany({}, {})",
-            csharp_literal(&csv),
-            csharp_literal(request_id)
-        )
-    };
-    unity_call(base, &call)
-}
-
-/// `route`: `"sync"` | `"export"`.
-pub fn unity_action(base: &str, route: &str) -> Result<String, String> {
-    let call = match route {
-        "sync" => "HKLGame.AssetLib.AssetLibraryBridge.SyncLibrary()",
-        _ => "HKLGame.AssetLib.AssetLibraryBridge.ExportScene()",
-    };
-    unity_call(base, call)
+/// Slugs the Unity ledger already holds (imported into the project).
+pub fn unity_imported_slugs(base: &str) -> Result<Vec<String>, String> {
+    let code = r#"var ledger = HKLGame.AssetLib.AssetLibraryLedgerStore.Load();
+return string.Join(",", ledger.items.ConvertAll(i => i.slug));"#;
+    let text = unity_eval(base, code)?;
+    Ok(text
+        .split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect())
 }
 
 /* ------------------------------- Painter --------------------------------- */

@@ -99,6 +99,9 @@ struct App {
     slides_model: Rc<VecModel<SlideItem>>,
     /// 0 = not decoded, 1 = queued, 2 = decoded/failed (per item index).
     thumb_state: Vec<u8>,
+    /// Slugs present in the open Unity project's import ledger.
+    unity_imported: std::collections::HashSet<String>,
+    unity_syncing: bool,
     selected: Option<usize>,
     edit: Option<EditState>,
     delete_armed: bool,
@@ -245,6 +248,7 @@ fn asset_row(it: &Item) -> AssetItem {
         tag2: it.tags.get(1).cloned().unwrap_or_default().into(),
         tag3: it.tags.get(2).cloned().unwrap_or_default().into(),
         in_cart: false,
+        in_unity: false,
         kind: it.kind().num(),
     }
 }
@@ -1060,12 +1064,93 @@ fn apply_dot(ui: &AppWindow, which: &str, dot: &Dot) {
         "unity" => {
             ui.set_unity_state(dot.state.as_str().into());
             ui.set_unity_status(dot.text.as_str().into());
+            if dot.state == "ok" {
+                request_unity_sync(ui.as_weak(), false);
+            } else {
+                clear_unity_imports(ui);
+            }
         }
         _ => {
             ui.set_painter_state(dot.state.as_str().into());
             ui.set_painter_status(dot.text.as_str().into());
         }
     }
+}
+
+fn update_unity_rows(a: &mut App) {
+    for i in 0..a.items.row_count() {
+        let Some(it) = a.state.items.get(i) else {
+            continue;
+        };
+        let flag = a.unity_imported.contains(&it.slug);
+        if let Some(mut row) = a.items.row_data(i) {
+            if row.in_unity != flag {
+                row.in_unity = flag;
+                a.items.set_row_data(i, row);
+            }
+        }
+    }
+}
+
+fn clear_unity_imports(ui: &AppWindow) {
+    app(|a| {
+        if !a.unity_imported.is_empty() {
+            a.unity_imported.clear();
+            update_unity_rows(a);
+        }
+    });
+    ui.set_unity_sync_state("Unity offline".into());
+}
+
+/// Query Unity's import ledger and paint the green dots. Called from the 15 s
+/// health probe and from the manual "Sync Unity" action.
+fn request_unity_sync(ui: Weak<AppWindow>, toast: bool) {
+    let Some((base, syncing)) = app(|a| (a.store.unity_base.clone(), a.unity_syncing)) else {
+        return;
+    };
+    if syncing {
+        return;
+    }
+    app(|a| a.unity_syncing = true);
+    if let Some(u) = ui.upgrade() {
+        u.set_unity_sync_state("syncing…".into());
+    }
+    std::thread::spawn(move || {
+        let result = bridge::unity_imported_slugs(&base);
+        let _ = slint::invoke_from_event_loop(move || {
+            let Some(u) = ui.upgrade() else {
+                return;
+            };
+            app(|a| {
+                a.unity_syncing = false;
+                match result {
+                    Ok(slugs) => {
+                        let set: std::collections::HashSet<String> =
+                            slugs.into_iter().collect();
+                        let count = set.len();
+                        a.unity_imported = set;
+                        update_unity_rows(a);
+                        u.set_unity_sync_state(format!("{count} imported").into());
+                        if toast {
+                            show_toast(
+                                &u,
+                                a,
+                                &format!("Unity: {count} imported asset(s)"),
+                                "ok",
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        u.set_unity_sync_state("sync failed".into());
+                        if toast {
+                            let detail: String = e.chars().take(140).collect();
+                            show_toast(&u, a, &format!("Unity sync failed: {detail}"), "error");
+                        }
+                    }
+                }
+            });
+        });
+    });
 }
 
 fn probe_all(ui: Weak<AppWindow>) {
@@ -1301,110 +1386,6 @@ fn deepseek_tag_call(
     let text = doc["choices"][0]["message"]["content"].as_str().unwrap_or("");
     serde_json::from_str::<serde_json::Value>(text.trim())
         .map_err(|_| format!("model did not return JSON: {}", text.chars().take(120).collect::<String>()))
-}
-
-fn spawn_unity_place(ui: Weak<AppWindow>, base: String, items: Vec<Item>, label: String) {
-    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let slugs: Vec<String> = items
-        .into_iter()
-        .filter(|it| !it.slug.is_empty() && seen.insert(it.code.clone()))
-        .map(|it| it.slug)
-        .collect();
-    if slugs.is_empty() {
-        return;
-    }
-    let total = slugs.len();
-    std::thread::spawn(move || {
-        // One request for the whole set: Unity imports everything in a single transaction and
-        // lays the set out in the scene, instead of one full import per asset.
-        let request_id = format!("rq-{}-bulk", chrono::Utc::now().timestamp_millis());
-        let (placed, failed, first_error) = match bridge::unity_place_items(&base, &slugs, &request_id) {
-            Ok(body) => {
-                let value = serde_json::from_str::<serde_json::Value>(&body).ok();
-                let placed = value
-                    .as_ref()
-                    .and_then(|v| v.get("placed"))
-                    .and_then(|x| x.as_u64())
-                    .unwrap_or(0) as usize;
-                let failed = value
-                    .as_ref()
-                    .and_then(|v| v.get("failed"))
-                    .and_then(|x| x.as_u64())
-                    .unwrap_or((total.saturating_sub(placed)) as u64) as usize;
-                let error = value
-                    .as_ref()
-                    .and_then(|v| v.get("errors"))
-                    .and_then(|x| x.as_array())
-                    .and_then(|a| a.first())
-                    .and_then(|x| x.as_str())
-                    .unwrap_or("Unknown error")
-                    .to_string();
-                (placed, failed, error)
-            }
-            Err(e) => (0usize, total, e),
-        };
-
-        let _ = slint::invoke_from_event_loop(move || {
-            let Some(u) = ui.upgrade() else {
-                return;
-            };
-            let (message, tone) = if placed == total {
-                if total == 1 {
-                    (format!("Placed {label} in Unity"), "ok".to_string())
-                } else {
-                    (format!("Placed {placed} {label}s in Unity"), "ok".to_string())
-                }
-            } else if placed > 0 {
-                (
-                    format!("Placed {placed}, {failed} failed: {first_error}"),
-                    "error".to_string(),
-                )
-            } else if first_error.is_empty() {
-                ("Place failed".to_string(), "error".to_string())
-            } else {
-                (first_error, "error".to_string())
-            };
-            app(|a| show_toast(&u, a, &message, &tone));
-        });
-    });
-}
-
-fn spawn_unity_action(ui: Weak<AppWindow>, base: String, route: String) {
-    std::thread::spawn(move || {
-        let res = bridge::unity_action(&base, &route);
-        let _ = slint::invoke_from_event_loop(move || {
-            let Some(u) = ui.upgrade() else {
-                return;
-            };
-            let is_sync = route == "sync";
-            let (message, tone) = match &res {
-                Ok(body) => {
-                    let ok = serde_json::from_str::<serde_json::Value>(body)
-                        .ok()
-                        .and_then(|v| v.get("ok").and_then(|x| x.as_bool()))
-                        .unwrap_or(false);
-                    if ok {
-                        (
-                            if is_sync {
-                                "Library synced".to_string()
-                            } else {
-                                "Scene exported".to_string()
-                            },
-                            "ok".to_string(),
-                        )
-                    } else {
-                        let err = serde_json::from_str::<serde_json::Value>(body)
-                            .ok()
-                            .and_then(|v| v.get("error").and_then(|x| x.as_str()).map(str::to_string))
-                            .unwrap_or_else(|| if is_sync { "Sync failed" } else { "Export failed" }.to_string());
-                        (err, "error".to_string())
-                    }
-                }
-                Err(e) => (e.clone(), "error".to_string()),
-            };
-            app(|a| show_toast(&u, a, &message, &tone));
-        });
-    });
 }
 
 fn spawn_painter_send(
@@ -2441,6 +2422,8 @@ fn main() -> Result<(), slint::PlatformError> {
         cart_model,
         slides_model,
         thumb_state,
+        unity_imported: std::collections::HashSet::new(),
+        unity_syncing: false,
         selected: None,
         edit: None,
         delete_armed: false,
@@ -2506,6 +2489,7 @@ fn main() -> Result<(), slint::PlatformError> {
     ui.set_painter_state("checking".into());
     ui.set_blender_status("Checking…".into());
     ui.set_unity_status("Checking…".into());
+    ui.set_unity_sync_state("checking…".into());
     ui.set_painter_status("Checking…".into());
     if let Ok(a) = app_rc.try_borrow() {
         ui.set_blender_root(a.store.blender_root.clone().into());
@@ -2897,6 +2881,7 @@ fn wire_callbacks(ui: &AppWindow, app_rc: &Rc<RefCell<App>>, drag: &Rc<WindowDra
                         a.items.set_vec(
                             a.state.items.iter().map(asset_row).collect::<Vec<_>>(),
                         );
+                        update_unity_rows(a);
                         a.thumb_state = vec![0u8; a.state.items.len()];
                         a.selected = None;
                         a.edit = None;
@@ -3024,56 +3009,6 @@ fn wire_callbacks(ui: &AppWindow, app_rc: &Rc<RefCell<App>>, drag: &Rc<WindowDra
                         a.store.blender_root.clone(),
                         "import".to_string(),
                         targets,
-                    );
-                }
-            }
-        });
-    }
-    {
-        let app_rc = app_rc.clone();
-        let weak = ui.as_weak();
-        ui.on_card_unity(move |index| {
-            if index < 0 {
-                return;
-            }
-            if let Ok(a) = app_rc.try_borrow() {
-                let idx = index as usize;
-                if idx >= a.state.items.len() {
-                    return;
-                }
-                let item = a.state.items[idx].clone();
-                if let Some(u) = weak.upgrade() {
-                    spawn_unity_place(
-                        u.as_weak(),
-                        a.store.unity_base.clone(),
-                        vec![item],
-                        "asset".to_string(),
-                    );
-                }
-            }
-        });
-    }
-    {
-        let app_rc = app_rc.clone();
-        let weak = ui.as_weak();
-        ui.on_card_painter(move |index| {
-            if index < 0 {
-                return;
-            }
-            if let Ok(a) = app_rc.try_borrow() {
-                let idx = index as usize;
-                if idx >= a.state.items.len() {
-                    return;
-                }
-                let targets = bridge::painter_targets(std::slice::from_ref(&a.state.items[idx]));
-                if let Some(u) = weak.upgrade() {
-                    spawn_painter_send(
-                        u.as_weak(),
-                        a.store.painter_bridge.clone(),
-                        a.store.painter_root.clone(),
-                        "import".to_string(),
-                        targets,
-                        "asset".to_string(),
                     );
                 }
             }
@@ -3461,6 +3396,7 @@ fn wire_callbacks(ui: &AppWindow, app_rc: &Rc<RefCell<App>>, drag: &Rc<WindowDra
                                                 if let Some(old) = a.items.row_data(pos) {
                                                     row.thumb = old.thumb;
                                                     row.in_cart = old.in_cart;
+                                                    row.in_unity = old.in_unity;
                                                 }
                                                 a.items.set_row_data(pos, row);
                                             }
@@ -3596,6 +3532,7 @@ fn wire_callbacks(ui: &AppWindow, app_rc: &Rc<RefCell<App>>, drag: &Rc<WindowDra
                                     if let Some(old) = a.items.row_data(pos) {
                                         row.thumb = old.thumb;
                                         row.in_cart = old.in_cart;
+                                        row.in_unity = old.in_unity;
                                     }
                                     a.items.set_row_data(pos, row);
                                     if a.selected == Some(pos) {
@@ -3677,6 +3614,7 @@ fn wire_callbacks(ui: &AppWindow, app_rc: &Rc<RefCell<App>>, drag: &Rc<WindowDra
                                 a.items.set_vec(
                                     a.state.items.iter().map(asset_row).collect::<Vec<_>>(),
                                 );
+                                update_unity_rows(a);
                                 a.thumb_state = vec![0u8; a.state.items.len()];
                             }
                             a.selected = None;
@@ -3761,6 +3699,7 @@ fn wire_callbacks(ui: &AppWindow, app_rc: &Rc<RefCell<App>>, drag: &Rc<WindowDra
                                 if let Some(old) = a.items.row_data(pos) {
                                     row.thumb = old.thumb;
                                     row.in_cart = old.in_cart;
+                                    row.in_unity = old.in_unity;
                                 }
                                 a.items.set_row_data(pos, row);
                                 a.thumb_state[pos] = 0;
@@ -3804,25 +3743,6 @@ fn wire_callbacks(ui: &AppWindow, app_rc: &Rc<RefCell<App>>, drag: &Rc<WindowDra
                         a.store.blender_root.clone(),
                         "import".to_string(),
                         targets,
-                    );
-                }
-            }
-        });
-    }
-    {
-        let app_rc = app_rc.clone();
-        let weak = ui.as_weak();
-        ui.on_detail_unity(move || {
-            if let Ok(a) = app_rc.try_borrow() {
-                let Some(item) = current_item(&a) else {
-                    return;
-                };
-                if let Some(u) = weak.upgrade() {
-                    spawn_unity_place(
-                        u.as_weak(),
-                        a.store.unity_base.clone(),
-                        vec![item],
-                        "current asset".to_string(),
                     );
                 }
             }
@@ -4026,50 +3946,9 @@ fn wire_callbacks(ui: &AppWindow, app_rc: &Rc<RefCell<App>>, drag: &Rc<WindowDra
         });
     }
     {
-        let app_rc = app_rc.clone();
         let weak = ui.as_weak();
-        ui.on_unity_place_cart(move || {
-            let Ok(mut a) = app_rc.try_borrow_mut() else {
-                return;
-            };
-            let Some(u) = weak.upgrade() else {
-                return;
-            };
-            let items = cart_items(&a);
-            if items.is_empty() {
-                show_toast(&u, &mut a, "Cart is empty", "info");
-            } else {
-                show_toast(&u, &mut a, &format!("Placing {} in Unity…", items.len()), "info");
-                spawn_unity_place(
-                    u.as_weak(),
-                    a.store.unity_base.clone(),
-                    items,
-                    "cart asset".to_string(),
-                );
-            }
-        });
-    }
-    {
-        let app_rc = app_rc.clone();
-        let weak = ui.as_weak();
-        ui.on_unity_action(move |route| {
-            if let Ok(mut a) = app_rc.try_borrow_mut() {
-                let Some(u) = weak.upgrade() else {
-                    return;
-                };
-                let is_sync = route.as_str() == "sync";
-                show_toast(
-                    &u,
-                    &mut a,
-                    if is_sync { "Syncing library…" } else { "Exporting scene…" },
-                    "info",
-                );
-                spawn_unity_action(
-                    u.as_weak(),
-                    a.store.unity_base.clone(),
-                    route.to_string(),
-                );
-            }
+        ui.on_unity_sync(move || {
+            request_unity_sync(weak.clone(), true);
         });
     }
     {
