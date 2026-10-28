@@ -462,6 +462,54 @@ pub fn unity_health(base: &str) -> Dot {
     }
 }
 
+/// Texture asset paths the Unity ledger already holds. Paths are reduced to
+/// their `_textures/...` library-relative form so the desktop Textures tab can
+/// match them directly.
+pub fn unity_imported_textures(base: &str) -> Result<Vec<String>, String> {
+    let code = r#"var ledger = HKLGame.AssetLib.AssetLibraryLedgerStore.Load();
+var set = new System.Collections.Generic.HashSet<string>(System.StringComparer.OrdinalIgnoreCase);
+foreach (var item in ledger.items) {
+    if (item.textures == null || !string.IsNullOrEmpty(item.fbx)) continue;
+    foreach (var path in item.textures) {
+        if (!string.IsNullOrEmpty(path)) set.Add(path.Replace('\\', '/'));
+    }
+}
+return string.Join("\n", set);"#;
+    let text = unity_eval(base, code)?;
+    Ok(text
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if line.is_empty() {
+                return None;
+            }
+            let lower = line.to_lowercase();
+            if let Some(cut) = lower.find("_textures/") {
+                Some(line[cut..].to_string())
+            } else {
+                Some(line.to_string())
+            }
+        })
+        .collect())
+}
+
+/// Import a batch of texture-set codes into the Unity project. Uses the
+/// texture-only path: copies and configures the maps, records one ledger entry
+/// per set, and skips material/prefab generation (which would trigger shader
+/// compilation and is not needed by the Textures tab).
+pub fn unity_bulk_import(base: &str, codes: &[String]) -> Result<String, String> {
+    if codes.is_empty() {
+        return Err("No texture assets to import".to_string());
+    }
+    let csv = codes.join(",");
+    let escaped = csv.replace('\\', "\\\\").replace('"', "\\\"");
+    let code = format!(
+        r#"var report = HKLGame.AssetLib.AssetLibraryBridge.ImportTextures("{escaped}");
+return report;"#
+    );
+    unity_eval(base, &code)
+}
+
 /// Slugs the Unity ledger already holds (imported into the project).
 pub fn unity_imported_slugs(base: &str) -> Result<Vec<String>, String> {
     let code = r#"var ledger = HKLGame.AssetLib.AssetLibraryLedgerStore.Load();

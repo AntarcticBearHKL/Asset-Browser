@@ -14,7 +14,7 @@
 param(
     [string]$Exe = "$PSScriptRoot\..\target\debug\asset-library-desktop.exe",
     [string]$Out = "$env:TEMP\ald-shot.png",
-    [ValidateSet('grid', 'cart', 'rig', 'rigbones', 'model', 'cat', 'blender', 'unity', 'painter', 'settings')][string]$View = '',
+    [ValidateSet('grid', 'textures', 'cart', 'rig', 'rigbones', 'model', 'cat', 'blender', 'unity', 'painter', 'settings')][string]$View = '',
     [int]$Wait = 10000,
     [switch]$Offscreen,
     [switch]$Keep

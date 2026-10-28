@@ -101,7 +101,9 @@ struct App {
     thumb_state: Vec<u8>,
     /// Slugs present in the open Unity project's import ledger.
     unity_imported: std::collections::HashSet<String>,
+    unity_textures: std::collections::HashSet<String>,
     unity_syncing: bool,
+    unity_importing: bool,
     selected: Option<usize>,
     edit: Option<EditState>,
     delete_armed: bool,
@@ -1088,11 +1090,22 @@ fn apply_dot(ui: &AppWindow, which: &str, dot: &Dot) {
     }
 }
 
+fn normalize_texture_path(path: &str) -> String {
+    let path = path.replace('\\', "/").to_lowercase();
+    if let Some(cut) = path.find("_textures/") {
+        path[cut..].to_string()
+    } else {
+        path
+    }
+}
+
 fn update_unity_rows(a: &mut App) {
     for i in 0..a.items.row_count() {
         let Some(it) = a.state.items.get(i) else {
             continue;
         };
+        // Material sets get their own ledger entries, so slug membership works
+        // for both models and texture-only assets.
         let flag = a.unity_imported.contains(&it.slug);
         if let Some(mut row) = a.items.row_data(i) {
             if row.in_unity != flag {
@@ -1105,8 +1118,9 @@ fn update_unity_rows(a: &mut App) {
 
 fn clear_unity_imports(ui: &AppWindow) {
     app(|a| {
-        if !a.unity_imported.is_empty() {
+        if !a.unity_imported.is_empty() || !a.unity_textures.is_empty() {
             a.unity_imported.clear();
+            a.unity_textures.clear();
             update_unity_rows(a);
         }
     });
@@ -1116,7 +1130,9 @@ fn clear_unity_imports(ui: &AppWindow) {
 /// Query Unity's import ledger and paint the green dots. Called from the 15 s
 /// health probe and from the manual "Sync Unity" action.
 fn request_unity_sync(ui: Weak<AppWindow>, toast: bool) {
-    let Some((base, syncing)) = app(|a| (a.store.unity_base.clone(), a.unity_syncing)) else {
+    let Some((base, syncing)) =
+        app(|a| (a.store.unity_base.clone(), a.unity_syncing || a.unity_importing))
+    else {
         return;
     };
     if syncing {
@@ -1127,26 +1143,39 @@ fn request_unity_sync(ui: Weak<AppWindow>, toast: bool) {
         u.set_unity_sync_state("syncing…".into());
     }
     std::thread::spawn(move || {
-        let result = bridge::unity_imported_slugs(&base);
+        let slugs = bridge::unity_imported_slugs(&base);
+        // The texture count is informational; a failed extra query must not hide
+        // which assets are imported.
+        let textures = bridge::unity_imported_textures(&base).unwrap_or_default();
         let _ = slint::invoke_from_event_loop(move || {
             let Some(u) = ui.upgrade() else {
                 return;
             };
             app(|a| {
                 a.unity_syncing = false;
-                match result {
+                match slugs {
                     Ok(slugs) => {
-                        let set: std::collections::HashSet<String> =
+                        let slugs: std::collections::HashSet<String> =
                             slugs.into_iter().collect();
-                        let count = set.len();
-                        a.unity_imported = set;
+                        let textures: std::collections::HashSet<String> = textures
+                            .into_iter()
+                            .map(|t| normalize_texture_path(&t))
+                            .collect();
+                        let asset_count = slugs.len();
+                        let texture_count = textures.len();
+                        a.unity_imported = slugs;
+                        a.unity_textures = textures;
                         update_unity_rows(a);
-                        u.set_unity_sync_state(format!("{count} imported").into());
+                        u.set_unity_sync_state(
+                            format!("{asset_count} assets · {texture_count} textures").into(),
+                        );
                         if toast {
                             show_toast(
                                 &u,
                                 a,
-                                &format!("Unity: {count} imported asset(s)"),
+                                &format!(
+                                    "Unity: {asset_count} asset(s), {texture_count} texture(s)"
+                                ),
                                 "ok",
                             );
                         }
@@ -1160,6 +1189,79 @@ fn request_unity_sync(ui: Weak<AppWindow>, toast: bool) {
                     }
                 }
             });
+        });
+    });
+}
+
+/// Import the texture-only material sets into Unity in short batches, then
+/// re-read the ledger so the Textures tab's indicators reflect the result.
+fn request_unity_import(ui: Weak<AppWindow>, codes: Vec<String>) {
+    if codes.is_empty() {
+        if let Some(u) = ui.upgrade() {
+            app(|a| show_toast(&u, a, "No texture sets to import", "warn"));
+        }
+        return;
+    }
+    let Some((base, busy)) =
+        app(|a| (a.store.unity_base.clone(), a.unity_syncing || a.unity_importing))
+    else {
+        return;
+    };
+    if busy {
+        return;
+    }
+    let count = codes.len();
+    app(|a| a.unity_importing = true);
+    if let Some(u) = ui.upgrade() {
+        u.set_unity_sync_state(format!("importing {count} texture set(s)…").into());
+    }
+    std::thread::spawn(move || {
+        // Keep each Unity call short: a texture set can spend seconds
+        // re-importing its maps, so one 52-item request risks an MCP timeout.
+        let mut done = 0usize;
+        let mut failure: Option<String> = None;
+        for chunk in codes.chunks(8) {
+            match bridge::unity_bulk_import(&base, chunk) {
+                Ok(_) => done += chunk.len(),
+                Err(e) => {
+                    failure = Some(e);
+                    break;
+                }
+            }
+        }
+        let _ = slint::invoke_from_event_loop(move || {
+            let Some(u) = ui.upgrade() else {
+                return;
+            };
+            app(|a| a.unity_importing = false);
+            match failure {
+                None => {
+                    app(|a| {
+                        show_toast(
+                            &u,
+                            a,
+                            &format!("Unity: imported {done} texture set(s)"),
+                            "ok",
+                        );
+                    });
+                }
+                Some(e) => {
+                    let detail: String = e.chars().take(160).collect();
+                    app(|a| {
+                        u.set_unity_sync_state("texture import failed".into());
+                        show_toast(
+                            &u,
+                            a,
+                            &format!(
+                                "Unity texture import stopped after {done} set(s): {detail}"
+                            ),
+                            "error",
+                        );
+                    });
+                }
+            }
+            // Even a partial run imported something; refresh the lamps.
+            request_unity_sync(u.as_weak(), false);
         });
     });
 }
@@ -2434,7 +2536,9 @@ fn main() -> Result<(), slint::PlatformError> {
         slides_model,
         thumb_state,
         unity_imported: std::collections::HashSet::new(),
+        unity_textures: std::collections::HashSet::new(),
         unity_syncing: false,
+        unity_importing: false,
         selected: None,
         edit: None,
         delete_armed: false,
@@ -2582,6 +2686,8 @@ fn main() -> Result<(), slint::PlatformError> {
             "blender" => ui.invoke_blender_open_dialog(),
             "unity" => ui.invoke_unity_open_dialog(),
             "painter" => ui.invoke_painter_open_dialog(),
+            // Textures tab, for screenshots and smoke tests.
+            "textures" => ui.invoke_select_tab(1),
             // Settings sheet (same as clicking the brand), for screenshots.
             "settings" => ui.set_settings_open(true),
             _ => {}
@@ -3986,6 +4092,21 @@ fn wire_callbacks(ui: &AppWindow, app_rc: &Rc<RefCell<App>>, drag: &Rc<WindowDra
         let weak = ui.as_weak();
         ui.on_unity_sync(move || {
             request_unity_sync(weak.clone(), true);
+        });
+    }
+    {
+        let weak = ui.as_weak();
+        ui.on_unity_import_textures(move || {
+            let codes: Vec<String> = app(|a| {
+                a.state
+                    .items
+                    .iter()
+                    .filter(|it| it.kind == "material" && !it.code.is_empty())
+                    .map(|it| it.code.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+            request_unity_import(weak.clone(), codes);
         });
     }
     {

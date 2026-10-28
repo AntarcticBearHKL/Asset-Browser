@@ -253,6 +253,7 @@ export component AppWindow inherits Window {
     callback unity-close();
     callback unity-config(string);
     callback unity-sync();
+    callback unity-import-textures();
     callback painter-open-dialog();
     callback painter-close();
     callback painter-config(string, string, string);
@@ -601,6 +602,15 @@ export component AppWindow inherits Window {
 
                 Rectangle { horizontal-stretch: 1; }
 
+                if root.tab == 1 : Btn {
+                    label: "Import textures";
+                    width: 124px;
+                    height: 28px;
+                    font-size: 11px;
+                    mono: true;
+                    enabled: root.unity-state == "ok";
+                    clicked => { root.unity-import-textures(); }
+                }
                 Btn {
                     label: "Sync Unity";
                     width: 96px;
@@ -1774,7 +1784,7 @@ export component AppWindow inherits Window {
                     BridgeStatus { state: root.unity-state; text: root.unity-status; recheck => { root.check-bridge("unity"); } }
                     DialogField { caption: "MCP ENDPOINT"; value <=> root.unity-base; edited(t) => { root.unity-config(root.unity-base); } }
                     Text {
-                        text: "Unity must be running with the MCP bridge enabled. Sync imported re-reads the Unity ledger; cards for assets already in the project get a green UNITY dot. Importing is handled by the agent.";
+                        text: "Unity must be running with the MCP bridge enabled. Sync imported re-reads the Unity ledger; cards for assets already in the project get a green UNITY dot. The Textures tab can import its managed texture sets with Import textures.";
                         color: Theme.text-faint;
                         font-family: "Arial";
                         font-size: 12px;
