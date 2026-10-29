@@ -1,7 +1,7 @@
 # Asset Library MCP
 
 Agent-facing MCP server for the same local 3D asset library the desktop app browses.
-It runs over **stdio** and exposes 36 tools for search, inspection, tagging,
+It runs over **stdio** and exposes 34 tools for search, inspection, tagging,
 maintenance, LODs/textures, the shared cart, and Unity import.
 
 The server owns no data of its own:
@@ -49,5 +49,5 @@ uv run asset-library-mcp
   `asset_auto_tag`, `asset_auto_tag_batch`, `asset_revisions`, `asset_restore`.
 - **Maintenance** - `library_qa`, `texture_audit`, `texture_downscale`,
   `preview_regenerate`, `lod_generate`, `find_texture_usage`.
-- **Unity** - `unity_status`, `unity_import`, `unity_import_batch`,
-  `unity_import_scene`, `unity_import_rig`, `unity_sync_previews`.
+- **Unity** - `unity_status`, `unity_import_batch`, `unity_import_rig`,
+  `unity_sync_previews`.

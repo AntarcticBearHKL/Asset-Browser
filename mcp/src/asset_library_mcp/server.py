@@ -4,8 +4,8 @@ The tools are grouped by the job an agent actually does:
 
 * discover  - search_assets, library_facets, library_stats, find_similar
 * understand- get_asset, get_preview, list_textures, find_texture_usage, list_clips, get_paths
-* transfer  - unity_status, unity_import, unity_import_scene, unity_import_rig,
-              unity_import_batch (staged, one transaction), unity_sync_previews
+* transfer  - unity_status, unity_import_batch (staged, one transaction), unity_sync_previews
+              (batch import is the only import path; assets are never pushed one by one)
 * workflow  - cart_list / cart_add / cart_remove / cart_clear / cart_export
 * hygiene   - library_qa
 """
@@ -174,21 +174,6 @@ def unity_status() -> dict:
         return {"online": False, "error": str(exc)}
 
 
-@mcp.tool()
-def unity_import(codes: list[str], spacing: float = 2.0, columns: int = 5, rot_y: float = 0.0) -> dict:
-    """Import assets into the open Unity scene.
-
-    Copies each asset's FBX and textures into `Assets/AssetLib/Imported/<code>_<slug>/`,
-    builds URP/Lit materials from the library's sidecar data (base colour, normal,
-    metallic, smoothness, transparency), then instantiates the models in a grid
-    spaced `spacing` metres apart, `columns` per row. Returns what Unity reported.
-    """
-    try:
-        return unity_bridge.import_assets(codes, spacing=spacing, columns=columns, rot_y=rot_y)
-    except unity_bridge.UnityError as exc:
-        return {"error": str(exc)}
-
-
 # ------------------------------------------------------------------ workflow
 @mcp.tool()
 def cart_list() -> dict:
@@ -282,19 +267,6 @@ def find_by_description(text: str, limit: int = 20) -> dict:
 
 
 # ------------------------------------------------------------ Unity: sets/rigs
-@mcp.tool()
-def unity_import_scene(pack: str = "", category: str = "", kind: str = "model", limit: int = 24,
-                       layout: str = "grid", spacing: float = 2.0, columns: int = 5) -> dict:
-    """Import a whole set into Unity at once: everything from a source pack
-    (e.g. "Modular Wooden Set") or a category (e.g. "Architecture/Fence"),
-    laid out as a `grid`, a `row`, or a `ring`."""
-    try:
-        return unity_bridge.import_scene(pack=pack, category=category, kind=kind, limit=limit,
-                                         layout=layout, spacing=spacing, columns=columns)
-    except unity_bridge.UnityError as exc:
-        return {"error": str(exc)}
-
-
 @mcp.tool()
 def unity_import_rig(code: str, clips: list[str] | None = None, x: float = 0.0, y: float = 0.0,
                      z: float = 0.0) -> dict:

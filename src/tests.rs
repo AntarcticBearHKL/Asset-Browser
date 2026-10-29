@@ -541,9 +541,9 @@ fn real_manifest_matches_ground_truth() {
         return;
     };
     let items = lib.load_manifest().expect("manifest loads");
-    assert_eq!(items.len(), 1975);
+    assert_eq!(items.len(), 1985);
     assert_eq!(items.iter().filter(|i| i.kind == "model").count(), 1912);
-    assert_eq!(items.iter().filter(|i| i.kind == "material").count(), 52);
+    assert_eq!(items.iter().filter(|i| i.kind == "material").count(), 62);
     assert_eq!(items.iter().filter(|i| i.kind == "rig").count(), 11);
     assert!(items.iter().filter(|i| i.kind == "rig").all(|i| !i.slug.is_empty()));
 }
